@@ -452,7 +452,7 @@ if((!success) && file != NULL)
 
 /** load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
+bool install_page (void *upage, void *kpage, bool writable);
 
 /** Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -499,6 +499,53 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
   return true;
 }
 
+bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
+              uint32_t read_bytes, uint32_t zero_bytes, bool writable)
+{
+  struct my_sup_table_elem *sup_elem = 
+    malloc(sizeof(struct my_sup_table_elem));
+  if(sup_elem == NULL)
+  {
+    return false;
+  }
+  sup_elem->file = file;
+  sup_elem->ofs = ofs;
+  sup_elem->upage = upage;
+  sup_elem->read_bytes = read_bytes;
+  sup_elem->zero_bytes = zero_bytes;
+  sup_elem->writable = writable;
+  sup_elem->cur_thread = thread_current();
+  sup_elem->kpage = NULL;
+  lock_acquire(&my_sup_table_lock);
+  list_push_back(&my_sup_table, &sup_elem->elem);
+  lock_release(&my_sup_table_lock);
+  return true;
+}
+
+bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
+             uint8_t *upage, uint32_t read_bytes, uint32_t zero_bytes, 
+             bool writable, uint8_t *kpage)
+{
+  struct my_sup_table_elem *sup_elem = 
+    malloc(sizeof(struct my_sup_table_elem));
+  if(sup_elem == NULL)
+  {
+    return false;
+  }
+  sup_elem->file = file;
+  sup_elem->ofs = ofs;
+  sup_elem->upage = upage;
+  sup_elem->read_bytes = read_bytes;
+  sup_elem->zero_bytes = zero_bytes;
+  sup_elem->writable = writable;
+  sup_elem->cur_thread = thread_current();
+  sup_elem->kpage = kpage;
+  lock_acquire(&my_sup_table_lock);
+  list_push_back(&my_sup_table, &sup_elem->elem);
+  lock_release(&my_sup_table_lock);
+  return true;
+}
+
 /** Loads a segment starting at offset OFS in FILE at address
    UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
    memory are initialized, as follows:
@@ -521,6 +568,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
+#ifdef VM
+  return (my_insert_sup_table(file,ofs,upage,read_bytes,
+                              zero_bytes,writable));
+#else
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
@@ -556,6 +607,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       upage += PGSIZE;
     }
   return true;
+#endif
 }
 
 /** Create a minimal stack by mapping a zeroed page at the top of
@@ -586,8 +638,8 @@ setup_stack (void **esp)
    KPAGE should probably be a page obtained from the user pool
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
-   if memory allocation fails. */
-static bool
+   if memory allocation fails. */ 
+bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();
@@ -619,4 +671,35 @@ bool my_insert_frame_table(void *upage, void *kpage)
   list_push_front(&my_frame_table ,&frame_elem->elem);
   lock_release(&my_frame_table_lock);
   return true;
+}
+void my_delete_sup_elem_free_kpage_no_lock(
+   struct my_sup_table_elem* sup_elem)
+{
+   if(sup_elem->kpage!=NULL)
+      palloc_free_page(sup_elem->kpage);
+   list_remove(&sup_elem->elem);
+   free(sup_elem);
+}
+
+void my_delete_mul_sup_free_kpage(
+   uint8_t *u_start, uint8_t *u_end)
+{
+   struct thread* cur_thread=thread_current();
+   struct list_elem* e;
+   lock_acquire(&my_sup_table_lock);
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+      {
+         struct my_sup_table_elem* sup_elem = 
+            list_entry(e, struct my_sup_table_elem, elem);
+         if(sup_elem->cur_thread == cur_thread && 
+            sup_elem->upage >= (void *)u_start && 
+            sup_elem->upage < (void *)u_end)
+            {
+               e=list_prev(e);
+               my_delete_sup_elem_free_kpage_no_lock(sup_elem);
+            }
+      }
+   lock_release(&my_sup_table_lock);
 }

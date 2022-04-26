@@ -108,6 +108,73 @@ kill (struct intr_frame *f)
     }
 }
 
+#ifdef VM
+
+int my_load_file(struct my_sup_table_elem* sup_elem)
+{
+   struct file * file = sup_elem->file;
+   off_t ofs = sup_elem->ofs;
+   uint8_t *upage = sup_elem->upage;
+   uint8_t *u_start = sup_elem->upage;
+   uint32_t read_bytes = sup_elem->read_bytes; 
+   uint32_t zero_bytes = sup_elem->zero_bytes; 
+   bool writable = sup_elem->writable;
+
+   list_remove(&sup_elem->elem);
+   free(sup_elem);
+
+   file_seek (file, ofs);
+  while (read_bytes > 0 || zero_bytes > 0) 
+    {
+      /* Calculate how to fill this page.
+         We will read PAGE_READ_BYTES bytes from FILE
+         and zero the final PAGE_ZERO_BYTES bytes. */
+      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+      /* Get a page of memory. */
+      uint8_t *kpage = palloc_get_page (PAL_USER);
+      if (kpage == NULL)
+      {
+         my_delete_mul_sup_free_kpage(u_start,upage);
+        return false;
+      }
+
+      /* Load this page. */
+      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+        {
+          my_delete_mul_sup_free_kpage(u_start,upage);
+          palloc_free_page (kpage);
+          return false; 
+        }
+      memset (kpage + page_read_bytes, 0, page_zero_bytes);
+
+      /* Add the page to the process's address space. */
+      if (!install_page (upage, kpage, writable)) 
+        {
+          my_delete_mul_sup_free_kpage(u_start,upage);
+          palloc_free_page (kpage);
+          return false; 
+        }
+
+      if(!my_insert_sup_table_with_kpage(file, ofs, upage,
+                                         read_bytes, zero_bytes,
+                                         writable, kpage))
+         {
+           my_delete_mul_sup_free_kpage(u_start,upage);
+           palloc_free_page (kpage);
+           return false; 
+         }
+
+      /* Advance. */
+      read_bytes -= page_read_bytes;
+      zero_bytes -= page_zero_bytes;
+      upage += PGSIZE;
+    }
+  return true;
+}
+#endif
+
 /** Page fault handler.  This is a skeleton that must be filled in
    to implement virtual memory.  Some solutions to project 2 may
    also require modifying this code.
@@ -128,7 +195,6 @@ page_fault (struct intr_frame *f)
   void *fault_addr;  /**< Fault address. */
 
    
-   thread_current()->my_exit_status = -1;
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -138,6 +204,37 @@ page_fault (struct intr_frame *f)
      [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
      (#PF)". */
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
+
+  struct thread* cur_thread = thread_current();
+
+#ifdef VM
+  intr_enable ();
+  struct list_elem* e;
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+      {
+         struct my_sup_table_elem* sup_elem = 
+            list_entry(e, struct my_sup_table_elem, elem);
+         if(sup_elem->cur_thread == cur_thread && 
+            sup_elem->upage <= fault_addr && 
+            sup_elem->upage + sup_elem->read_bytes + 
+            sup_elem->zero_bytes > fault_addr)
+            {
+               if(!my_load_file(sup_elem))
+               {
+                  break;
+               }
+               else
+               {
+                  return;
+               }
+            }
+      }
+   intr_disable();
+#endif
+
+  cur_thread->my_exit_status = -1;
 
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */

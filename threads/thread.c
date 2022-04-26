@@ -107,6 +107,8 @@ thread_init (void)
   #ifdef USERPROG
   list_init (&my_frame_table);
   lock_init(&my_frame_table_lock);
+  list_init(&my_sup_table);
+  lock_init(&my_sup_table_lock);
   #endif
   if(thread_mlfqs)
   {
