@@ -53,5 +53,7 @@ void my_delete_sup_elem_free_kpage_no_lock(
    struct my_sup_table_elem* sup_elem);
 void my_delete_mul_sup_free_kpage(
    uint8_t *u_start, uint8_t *uend);
+void my_delete_mul_sup_free_kpage_by_thread(void);
+
 
 #endif /**< userprog/process.h */

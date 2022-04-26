@@ -209,6 +209,7 @@ process_exit (void)
     file_close(the_file);
   }
 
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -223,8 +224,9 @@ process_exit (void)
          that's been freed (and cleared). */
       cur->pagedir = NULL;
       pagedir_activate (NULL);
-      pagedir_destroy (pd);
+      my_delete_mul_sup_free_kpage_by_thread();
     }
+
 }
 
 /** Sets up the CPU for running user code in the current
@@ -696,6 +698,26 @@ void my_delete_mul_sup_free_kpage(
          if(sup_elem->cur_thread == cur_thread && 
             sup_elem->upage >= (void *)u_start && 
             sup_elem->upage < (void *)u_end)
+            {
+               e=list_prev(e);
+               my_delete_sup_elem_free_kpage_no_lock(sup_elem);
+            }
+      }
+   lock_release(&my_sup_table_lock);
+}
+
+void my_delete_mul_sup_free_kpage_by_thread()
+{
+   struct thread* cur_thread=thread_current();
+   struct list_elem* e;
+   lock_acquire(&my_sup_table_lock);
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+      {
+         struct my_sup_table_elem* sup_elem = 
+            list_entry(e, struct my_sup_table_elem, elem);
+         if(sup_elem->cur_thread == cur_thread)
             {
                e=list_prev(e);
                my_delete_sup_elem_free_kpage_no_lock(sup_elem);
