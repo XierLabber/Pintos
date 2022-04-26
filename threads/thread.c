@@ -106,6 +106,7 @@ thread_init (void)
   list_init (&(my_exec_files));
   #ifdef USERPROG
   list_init (&my_frame_table);
+  lock_init(&my_frame_table_lock);
   #endif
   if(thread_mlfqs)
   {
