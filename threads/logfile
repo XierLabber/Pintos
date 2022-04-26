@@ -1,0 +1,9 @@
+qemu-system-i386 -device isa-debug-exit -drive format=raw,media=disk,index=0,file=/tmp/kxi7ziBTTq.dsk -m 4 -net none -nographic -monitor null
+Pintos hda1
+Loading...........
+Kernel command line:
+Pintos booting with 3,968 kB RAM...
+367 pages available in kernel pool.
+367 pages available in user pool.
+Calibrating timer...  14,720,000 loops/s.
+Boot complete.

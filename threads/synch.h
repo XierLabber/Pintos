@@ -1,0 +1,69 @@
+#ifndef THREADS_SYNCH_H
+#define THREADS_SYNCH_H
+
+#include "../kernel/list.h"
+//#include <list.h>
+#include <stdbool.h>
+
+struct lock;
+
+/** A counting semaphore. */
+struct semaphore 
+  {
+    struct lock* my_lock;
+    unsigned value;             /**< Current value. */
+    struct list waiters;        /**< List of waiting threads. */
+  };
+
+void sema_init (struct semaphore *, unsigned value);
+void sema_down (struct semaphore *);
+bool sema_try_down (struct semaphore *);
+void sema_up (struct semaphore *);
+void sema_self_test (void);
+
+struct my_locks_and_priorities_list_elem
+  {
+    struct lock* my_lock;
+    int my_priority;
+    struct list_elem my_elem;
+  };
+
+/** Lock. */
+struct lock 
+  {
+    struct thread *holder;      /**< Thread holding lock (for debugging). */
+    struct semaphore semaphore; /**< Binary semaphore controlling access. */
+    struct my_locks_and_priorities_list_elem my_elem;
+  };
+
+void lock_init (struct lock *);
+void lock_acquire (struct lock *);
+bool lock_try_acquire (struct lock *);
+void lock_release (struct lock *);
+bool lock_held_by_current_thread (const struct lock *);
+
+/** Condition variable. */
+struct condition 
+  {
+    struct list waiters;        /**< List of waiting threads. */
+  };
+
+void cond_init (struct condition *);
+void cond_wait (struct condition *, struct lock *);
+void cond_signal (struct condition *, struct lock *);
+void cond_broadcast (struct condition *, struct lock *);
+
+int my_find_max_priority_lp(struct list* list_);
+struct list_elem* my_find_lp_lock(struct list* list_,
+                               struct lock* lock_);
+void my_boardcast_priority(struct thread* t);
+int my_get_vip_waiter_pri(struct semaphore* s);
+
+/** Optimization barrier.
+
+   The compiler will not reorder operations across an
+   optimization barrier.  See "Optimization Barriers" in the
+   reference guide for more information.*/
+#define barrier() asm volatile ("" : : : "memory")
+
+#endif /**< threads/synch.h */

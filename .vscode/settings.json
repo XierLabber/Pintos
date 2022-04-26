@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "list.h": "c",
+        "syscall-nr.h": "c",
+        "thread.h": "c",
+        "syscall.h": "c",
+        "stdint.h": "c",
+        "file.h": "c",
+        "malloc.h": "c",
+        "filesys.h": "c",
+        "*.inc": "c",
+        "string.h": "c",
+        "vaddr.h": "c"
+    }
+}
