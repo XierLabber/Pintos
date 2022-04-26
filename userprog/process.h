@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include "devices/timer.h"
 #include "lib/kernel/list.h"
+#include "threads/synch.h"
 
 struct my_frame_table_elem
 {
@@ -13,6 +14,15 @@ struct my_frame_table_elem
 };
 
 struct list my_frame_table;
+
+struct lock my_frame_table_lock;
+
+struct my_sup_table_elem
+{
+    struct list_elem elem;
+};
+
+struct list my_sup_table;
 
 int my_page_initialized_flag;
 int my_tss_initialized_flag;

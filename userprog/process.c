@@ -615,6 +615,8 @@ bool my_insert_frame_table(void *upage, void *kpage)
   }
   frame_elem->kpage=kpage;
   frame_elem->upage=upage;
+  lock_acquire(&my_frame_table_lock);
   list_push_front(&my_frame_table ,&frame_elem->elem);
+  lock_release(&my_frame_table_lock);
   return true;
 }

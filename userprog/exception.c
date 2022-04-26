@@ -127,14 +127,6 @@ page_fault (struct intr_frame *f)
   bool user;         /**< True: access by user, false: access by kernel. */
   void *fault_addr;  /**< Fault address. */
 
-   /*
-   if(!intr_context())
-   {
-      f->eip = (void (*) (void)) f->eax;
-      f->eax = -1;
-      return;
-   }
-   */
    
    thread_current()->my_exit_status = -1;
 
