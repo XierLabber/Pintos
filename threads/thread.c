@@ -104,6 +104,9 @@ thread_init (void)
   list_init (&all_list);
   list_init (&my_sleeping_list);
   list_init (&(my_exec_files));
+  #ifdef USERPROG
+  list_init (&my_frame_table);
+  #endif
   if(thread_mlfqs)
   {
 

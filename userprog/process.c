@@ -594,6 +594,27 @@ install_page (void *upage, void *kpage, bool writable)
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
-  return (pagedir_get_page (t->pagedir, upage) == NULL
+  int ans = (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+  if(ans)
+  {
+    if(!my_insert_frame_table(upage, kpage))
+    {
+      return false;
+    }
+  }
+  return ans;
+}
+bool my_insert_frame_table(void *upage, void *kpage)
+{
+  struct my_frame_table_elem *frame_elem = 
+    malloc(sizeof(struct my_frame_table_elem));
+  if(frame_elem == NULL)
+  {
+    return false;
+  }
+  frame_elem->kpage=kpage;
+  frame_elem->upage=upage;
+  list_push_front(&my_frame_table ,&frame_elem->elem);
+  return true;
 }
