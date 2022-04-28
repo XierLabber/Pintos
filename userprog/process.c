@@ -20,6 +20,7 @@
 #include "userprog/syscall.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
+#include "devices/block.h"
 
 #define MY_MAX_FILE_NAME_LENGTH 130
 #define MY_MAX_ARG_LENGTH 60
@@ -319,7 +320,7 @@ struct Elf32_Phdr
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
-static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
 
@@ -501,6 +502,8 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
   return true;
 }
 
+
+// the exist bit will not set to 1
 bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable)
 {
@@ -518,6 +521,8 @@ bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
   sup_elem->writable = writable;
   sup_elem->cur_thread = thread_current();
   sup_elem->kpage = NULL;
+  sup_elem->swap_plot = -1;
+  sup_elem->exist = 0;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
   lock_release(&my_sup_table_lock);
@@ -542,6 +547,8 @@ bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
   sup_elem->writable = writable;
   sup_elem->cur_thread = thread_current();
   sup_elem->kpage = kpage;
+  sup_elem->swap_plot = -1;
+  sup_elem->exist = 1;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
   lock_release(&my_sup_table_lock);
@@ -562,7 +569,7 @@ bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
 
    Return true if successful, false if a memory allocation error
    or disk read error occurs. */
-static bool
+bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 {
@@ -571,8 +578,30 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (ofs % PGSIZE == 0);
 
 #ifdef VM
-  return (my_insert_sup_table(file,ofs,upage,read_bytes,
-                              zero_bytes,writable));
+  //return (my_insert_sup_table(file,ofs,upage,read_bytes,
+  //                            zero_bytes,writable));
+  while (read_bytes > 0 || zero_bytes > 0) 
+    {
+      /* Calculate how to fill this page.
+         We will read PAGE_READ_BYTES bytes from FILE
+         and zero the final PAGE_ZERO_BYTES bytes. */
+      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+      
+      if(!my_insert_sup_table(file,ofs,upage,page_read_bytes,
+                              page_zero_bytes,writable))
+        {
+          return false;
+        }
+
+
+      /* Advance. */
+      read_bytes -= page_read_bytes;
+      zero_bytes -= page_zero_bytes;
+      ofs+=PGSIZE;
+      upage += PGSIZE;
+    }
+    return true;
 #else
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
@@ -724,4 +753,32 @@ void my_delete_mul_sup_free_kpage_by_thread()
             }
       }
    lock_release(&my_sup_table_lock);
+}
+
+void my_swap_table_init(void)
+{
+  lock_init(&my_swap_table.lock);
+  my_swap_table.b = block_get_role(BLOCK_SWAP);
+  int size = my_swap_table.b->size;
+  ASSERT(size>0);
+  my_swap_table.base = malloc(size+1);
+  my_swap_table.used_map = bitmap_create_in_buf(size,my_swap_table.base,size+1);
+}
+
+// will not use lock
+// return MY_NO_PLOT if failed
+block_sector_t my_get_swap_plot(void)
+{
+  size_t page_idx;
+  block_sector_t swap_plot;
+
+  page_idx = bitmap_scan_and_flip
+    (my_swap_table.used_map, 0, 8, false);
+
+  if(page_idx != BITMAP_ERROR)
+    swap_plot = page_idx;
+  else
+    swap_plot = MY_NO_PLOT;
+
+  return swap_plot;
 }

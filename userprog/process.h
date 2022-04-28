@@ -5,6 +5,10 @@
 #include "devices/timer.h"
 #include "lib/kernel/list.h"
 #include "threads/synch.h"
+#include "devices/block.h"
+#include <bitmap.h>
+
+#define MY_NO_PLOT 0xffffff
 
 struct my_frame_table_elem
 {
@@ -28,11 +32,24 @@ struct my_sup_table_elem
     bool writable;
     struct file *file;
     struct list_elem elem;
+    block_sector_t swap_plot;
+    int exist;
 };
 
 struct list my_sup_table;
 
 struct lock my_sup_table_lock;
+
+struct my_swap_table_t
+{
+    struct lock lock;
+    struct bitmap *used_map;
+    struct block* b;
+    void * base;
+};
+
+struct my_swap_table_t my_swap_table;
+
 
 int my_page_initialized_flag;
 int my_tss_initialized_flag;
@@ -49,11 +66,15 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 bool install_page (void *upage, void *kpage, bool writable);
+bool
+load_segment (struct file *file, off_t ofs, uint8_t *upage,
+              uint32_t read_bytes, uint32_t zero_bytes, bool writable);
 void my_delete_sup_elem_free_kpage_no_lock(
    struct my_sup_table_elem* sup_elem);
 void my_delete_mul_sup_free_kpage(
    uint8_t *u_start, uint8_t *uend);
 void my_delete_mul_sup_free_kpage_by_thread(void);
-
+void my_swap_table_init(void);
+block_sector_t my_get_swap_plot(void);
 
 #endif /**< userprog/process.h */

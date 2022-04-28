@@ -377,6 +377,27 @@ bool my_judge_ptr(const void* p)
     return false;
   }
   
+  struct list_elem* e;
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+      {
+         struct my_sup_table_elem* sup_elem = 
+            list_entry(e, struct my_sup_table_elem, elem);
+          //printf("%0x,%0x,%0x\n",p,sup_elem->upage,sup_elem->upage + sup_elem->read_bytes);
+         if(p>=(void *)sup_elem->upage && 
+            p<(void*)(sup_elem->upage + 
+            sup_elem->read_bytes + sup_elem->zero_bytes) &&
+            thread_current() == sup_elem->cur_thread &&
+            (void *)(p+3)>=(void *)sup_elem->upage && 
+            (void *)(p+3)<(void*)(sup_elem->upage + 
+            sup_elem->read_bytes + sup_elem->zero_bytes) &&
+            thread_current() == sup_elem->cur_thread)
+            {
+              return true;
+            }
+      }
+
   void* my_tmp = 
     pagedir_get_page(
       thread_current()->pagedir,p);

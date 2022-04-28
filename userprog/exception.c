@@ -4,6 +4,8 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "devices/block.h"
+#include "userprog/pagedir.h"
 
 /** Number of page faults processed. */
 static long long page_fault_cnt;
@@ -110,6 +112,7 @@ kill (struct intr_frame *f)
 
 #ifdef VM
 
+//no lock
 int my_load_file(struct my_sup_table_elem* sup_elem)
 {
    struct file * file = sup_elem->file;
@@ -169,6 +172,7 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
+      ofs+=PGSIZE;
       upage += PGSIZE;
     }
   return true;
@@ -208,6 +212,8 @@ page_fault (struct intr_frame *f)
   struct thread* cur_thread = thread_current();
 
 #ifdef VM
+  void* fault_upage = pg_round_down(fault_addr);
+  int flag = 1;
   intr_enable ();
   struct list_elem* e;
   for(e=list_begin(&my_sup_table);
@@ -216,13 +222,14 @@ page_fault (struct intr_frame *f)
       {
          struct my_sup_table_elem* sup_elem = 
             list_entry(e, struct my_sup_table_elem, elem);
-         if(sup_elem->cur_thread == cur_thread && 
-            sup_elem->upage <= fault_addr && 
-            sup_elem->upage + sup_elem->read_bytes + 
-            sup_elem->zero_bytes > fault_addr)
+         if(sup_elem->kpage == NULL &&
+            sup_elem->cur_thread == cur_thread && 
+            sup_elem->upage == fault_upage &&
+            sup_elem->exist == 0)
             {
                if(!my_load_file(sup_elem))
                {
+                  flag = 0;
                   break;
                }
                else
@@ -231,6 +238,62 @@ page_fault (struct intr_frame *f)
                }
             }
       }
+   if(flag)
+   {
+      for(e=list_begin(&my_sup_table);
+         e!=list_end(&my_sup_table);
+         e=list_next(e))
+         {
+            struct my_sup_table_elem* sup_elem = 
+               list_entry(e, struct my_sup_table_elem, elem);
+            if(sup_elem->upage == fault_upage)
+               {
+                  if(sup_elem->swap_plot == MY_NO_PLOT)
+                  {
+                     list_remove(&sup_elem->elem);
+                     bool ans = load_segment(sup_elem->file,
+                                             sup_elem->ofs,
+                                             sup_elem->upage,
+                                             sup_elem->read_bytes,
+                                             sup_elem->zero_bytes,
+                                             sup_elem->writable);
+                     free(sup_elem);
+                     if(!ans)
+                     {
+                        flag = 0;
+                        break;
+                     }
+                     return;
+                  }
+                  else
+                  {
+                     uint8_t *kpage = palloc_get_page (PAL_USER);
+                     if(kpage == NULL)
+                     {
+                        flag = 0;
+                        break;
+                     }
+                     lock_acquire(&my_swap_table.lock);
+                     for(int i=0;i<8;i++)
+                        block_read(my_swap_table.b, 
+                                 sup_elem->swap_plot + i, 
+                                 ((void*)kpage) + i*BLOCK_SECTOR_SIZE);
+                     bitmap_set_multiple(
+                        my_swap_table.used_map,
+                        sup_elem->swap_plot,
+                        8,false);
+                     lock_release(&my_swap_table.lock);
+                     install_page(sup_elem->upage, 
+                                  kpage, 
+                                  sup_elem->writable);
+                     sup_elem->kpage = kpage;
+                     pagedir_set_dirty(sup_elem->cur_thread->pagedir,
+                                       sup_elem->upage, true);
+                     return;
+                  }
+               }
+         }
+   }
    intr_disable();
 #endif
 

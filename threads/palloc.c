@@ -10,6 +10,8 @@
 #include "threads/loader.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
+#include "userprog/pagedir.h"
 
 /** Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
@@ -73,14 +75,33 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
   struct pool *pool = flags & PAL_USER ? &user_pool : &kernel_pool;
   void *pages;
   size_t page_idx;
+  int test_time = 10;
 
   if (page_cnt == 0)
+  {
     return NULL;
-
-  lock_acquire (&pool->lock);
-  page_idx = bitmap_scan_and_flip (pool->used_map, 0, page_cnt, false);
-  lock_release (&pool->lock);
-
+  }
+  while(test_time--)
+  {
+    lock_acquire (&pool->lock);
+    page_idx = bitmap_scan_and_flip (pool->used_map, 0, page_cnt, false);
+    lock_release (&pool->lock);
+    if(page_idx != BITMAP_ERROR)
+    {
+      break;
+    }
+    else
+    {
+      if(my_evict())
+      {
+        continue;
+      }
+      else
+      {
+        break;
+      }
+    }
+  }
   if (page_idx != BITMAP_ERROR)
     pages = pool->base + PGSIZE * page_idx;
   else
@@ -179,4 +200,90 @@ page_from_pool (const struct pool *pool, void *page)
   size_t end_page = start_page + bitmap_size (pool->used_map);
 
   return page_no >= start_page && page_no < end_page;
+}
+
+uint32_t* my_choose_evict()
+{
+  if(list_empty(&my_frame_table))
+  {
+    return NULL;
+  }
+
+  uint32_t* ans = (list_entry(list_front(&my_frame_table),
+    struct my_frame_table_elem, elem))->kpage;
+  return ans;
+}
+
+bool my_evict()
+{
+  uint32_t* evict_kpage = my_choose_evict();
+  bool need_to_swap = false;
+  lock_acquire(&my_sup_table_lock);
+  struct list_elem* e;
+  block_sector_t swap_plot;
+
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+    {
+      struct my_sup_table_elem* sup_elem = 
+        list_entry(e,struct my_sup_table_elem, elem);
+      if(sup_elem->kpage == evict_kpage)
+      {
+        uint32_t* pd = sup_elem->cur_thread->pagedir;
+        void * upage = sup_elem->upage;
+        if(pagedir_is_dirty(pd, upage))
+        {
+          need_to_swap = true;
+        }
+        pagedir_clear_page(pd, upage);
+      }
+    }
+
+  if(need_to_swap)
+  {
+    lock_acquire(&my_swap_table.lock);
+    swap_plot = my_get_swap_plot();
+    if(swap_plot == MY_NO_PLOT)
+    {
+      lock_release(&my_swap_table.lock);
+      lock_release(&my_sup_table_lock);
+      return false;
+    }
+    for(int i=0;i<8;i++)
+    {
+      block_write(my_swap_table.b, swap_plot + i, ((void *)evict_kpage) + i*BLOCK_SECTOR_SIZE);
+    }
+    lock_release(&my_swap_table.lock);
+    for(e=list_begin(&my_sup_table);
+        e!=list_end(&my_sup_table);
+        e=list_next(e))
+      {
+        struct my_sup_table_elem* sup_elem = 
+          list_entry(e,struct my_sup_table_elem, elem);
+        if(sup_elem->kpage == evict_kpage)
+        {
+          sup_elem->kpage = NULL;
+          sup_elem->swap_plot = swap_plot;
+        }
+      }
+  }
+  else
+  {
+    for(e=list_begin(&my_sup_table);
+        e!=list_end(&my_sup_table);
+        e=list_next(e))
+      {
+        struct my_sup_table_elem* sup_elem = 
+          list_entry(e,struct my_sup_table_elem, elem);
+        if(sup_elem->kpage == evict_kpage)
+        {
+          sup_elem->kpage = NULL;
+          sup_elem->swap_plot = MY_NO_PLOT;
+        }
+      }
+  }
+  lock_release(&my_sup_table_lock);
+  palloc_free_page(evict_kpage);
+  return true;
 }

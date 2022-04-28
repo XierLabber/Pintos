@@ -172,6 +172,10 @@ pintos_init (void)
   filesys_init (format_filesys);
 #endif
 
+#ifdef VM
+  my_swap_table_init();
+#endif
+
   printf ("Boot complete.\n");
   
   if (*argv != NULL) {

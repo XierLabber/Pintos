@@ -10,6 +10,13 @@
         "filesys.h": "c",
         "*.inc": "c",
         "string.h": "c",
-        "vaddr.h": "c"
+        "vaddr.h": "c",
+        "synch.h": "c",
+        "block.h": "c",
+        "stddef.h": "c",
+        "pagedir.h": "c",
+        "init.h": "c",
+        "loader.h": "c",
+        "ide.h": "c"
     }
 }
