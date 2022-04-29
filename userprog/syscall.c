@@ -10,6 +10,8 @@
 #include "filesys/file.h"
 #include "threads/synch.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
+#include "lib/kernel/list.h"
 #include "devices/input.h"
 #include "threads/malloc.h"
 
@@ -262,6 +264,32 @@ void my_sys_read(struct intr_frame *f)
   unsigned the_size = (unsigned)the_args[2];
   
   my_filter_buffer(the_buffer, the_size);
+  void* upage = (void*)((pg_no(the_buffer))<<PGBITS);
+  struct thread* cur_thread = thread_current();
+  lock_acquire(&my_sup_table_lock);
+  struct list_elem* e;
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
+      e=list_next(e))
+    {
+      struct my_sup_table_elem* sup_elem = 
+        list_entry(e, struct my_sup_table_elem, elem);
+      if(sup_elem->upage == upage && 
+         sup_elem->cur_thread == cur_thread)
+      {
+        if(sup_elem->writable == false)
+        {
+          lock_release(&my_sup_table_lock);
+          cur_thread->my_exit_status = -1;
+          thread_exit();
+        }
+        else
+        {
+          break;
+        }
+      }
+    }
+  lock_release(&my_sup_table_lock);
 
   if(the_fd == 0)
   {

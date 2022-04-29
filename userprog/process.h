@@ -9,6 +9,7 @@
 #include <bitmap.h>
 
 #define MY_NO_PLOT 0xffffff
+#define MY_STK_IDX 1
 
 struct my_frame_table_elem
 {
@@ -39,6 +40,8 @@ struct my_sup_table_elem
 struct list my_sup_table;
 
 struct lock my_sup_table_lock;
+
+struct lock my_evict_lock;
 
 struct my_swap_table_t
 {

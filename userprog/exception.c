@@ -98,6 +98,7 @@ kill (struct intr_frame *f)
          Kernel code shouldn't throw exceptions.  (Page faults
          may cause kernel exceptions--but they shouldn't arrive
          here.)  Panic the kernel to make the point.  */
+      printf("FAULT: %p\n",f->eip);
       intr_dump_frame (f);
       PANIC ("Kernel bug - unexpected interrupt in kernel"); 
 
@@ -112,9 +113,10 @@ kill (struct intr_frame *f)
 
 #ifdef VM
 
-//no lock
+
 int my_load_file(struct my_sup_table_elem* sup_elem)
 {
+   lock_acquire(&my_evict_lock);
    struct file * file = sup_elem->file;
    off_t ofs = sup_elem->ofs;
    uint8_t *upage = sup_elem->upage;
@@ -123,7 +125,12 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
    uint32_t zero_bytes = sup_elem->zero_bytes; 
    bool writable = sup_elem->writable;
 
+   printf("LOAD: %p\n",file);
+
+   lock_acquire(&my_sup_table_lock);
    list_remove(&sup_elem->elem);
+   lock_release(&my_sup_table_lock);
+
    free(sup_elem);
 
    file_seek (file, ofs);
@@ -136,18 +143,27 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
+      lock_release(&my_evict_lock);
       uint8_t *kpage = palloc_get_page (PAL_USER);
+      lock_acquire(&my_evict_lock);
       if (kpage == NULL)
       {
          my_delete_mul_sup_free_kpage(u_start,upage);
+         lock_release(&my_evict_lock);
+         printf("LOAD FAILED!1\n");
         return false;
       }
 
       /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      lock_acquire(&my_files_thread_lock);
+      int ans = file_read (file, kpage, page_read_bytes);
+      lock_release(&my_files_thread_lock);
+      if (ans != (int) page_read_bytes)
         {
           my_delete_mul_sup_free_kpage(u_start,upage);
           palloc_free_page (kpage);
+          lock_release(&my_evict_lock);
+         printf("LOAD FAILED!2\n");
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -157,17 +173,25 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
         {
           my_delete_mul_sup_free_kpage(u_start,upage);
           palloc_free_page (kpage);
+          lock_release(&my_evict_lock);
+         printf("LOAD FAILED!3\n");
           return false; 
         }
+
+      lock_release(&my_evict_lock);
 
       if(!my_insert_sup_table_with_kpage(file, ofs, upage,
                                          read_bytes, zero_bytes,
                                          writable, kpage))
          {
+           lock_acquire(&my_evict_lock);
            my_delete_mul_sup_free_kpage(u_start,upage);
            palloc_free_page (kpage);
+           lock_release(&my_evict_lock);
+         printf("LOAD FAILED!4\n");
            return false; 
          }
+           lock_acquire(&my_evict_lock);
 
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -175,6 +199,7 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
       ofs+=PGSIZE;
       upage += PGSIZE;
     }
+    lock_release(&my_evict_lock);
   return true;
 }
 #endif
@@ -198,7 +223,6 @@ page_fault (struct intr_frame *f)
   bool user;         /**< True: access by user, false: access by kernel. */
   void *fault_addr;  /**< Fault address. */
 
-   
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -212,9 +236,12 @@ page_fault (struct intr_frame *f)
   struct thread* cur_thread = thread_current();
 
 #ifdef VM
+   lock_acquire(&my_evict_lock);
   void* fault_upage = pg_round_down(fault_addr);
   int flag = 1;
+  int found = 0;
   intr_enable ();
+  lock_acquire(&my_sup_table_lock);
   struct list_elem* e;
   for(e=list_begin(&my_sup_table);
       e!=list_end(&my_sup_table);
@@ -227,8 +254,14 @@ page_fault (struct intr_frame *f)
             sup_elem->upage == fault_upage &&
             sup_elem->exist == 0)
             {
+               found = 1;
+               printf("REACH HERE!1, %p, FILE: %p\n",sup_elem->upage,sup_elem->file);
+               lock_release(&my_sup_table_lock);
+               lock_release(&my_evict_lock);
                if(!my_load_file(sup_elem))
                {
+                  lock_acquire(&my_evict_lock);
+                  lock_acquire(&my_sup_table_lock);
                   flag = 0;
                   break;
                }
@@ -248,26 +281,39 @@ page_fault (struct intr_frame *f)
                list_entry(e, struct my_sup_table_elem, elem);
             if(sup_elem->upage == fault_upage)
                {
+                  found = 1;
                   if(sup_elem->swap_plot == MY_NO_PLOT)
                   {
+                     printf("REACH HERE!2, %p\n",sup_elem->upage);
                      list_remove(&sup_elem->elem);
+                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_evict_lock);
                      bool ans = load_segment(sup_elem->file,
                                              sup_elem->ofs,
                                              sup_elem->upage,
                                              sup_elem->read_bytes,
                                              sup_elem->zero_bytes,
                                              sup_elem->writable);
+                     lock_acquire(&my_evict_lock);
+                     lock_acquire(&my_sup_table_lock);
                      free(sup_elem);
                      if(!ans)
                      {
                         flag = 0;
                         break;
                      }
+                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_evict_lock);
                      return;
                   }
                   else
                   {
+                     printf("REACH HERE!3, %p\n",sup_elem->upage);
+                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_evict_lock);
                      uint8_t *kpage = palloc_get_page (PAL_USER);
+                     lock_acquire(&my_evict_lock);
+                     lock_acquire(&my_sup_table_lock);
                      if(kpage == NULL)
                      {
                         flag = 0;
@@ -275,9 +321,11 @@ page_fault (struct intr_frame *f)
                      }
                      lock_acquire(&my_swap_table.lock);
                      for(int i=0;i<8;i++)
+                     {
                         block_read(my_swap_table.b, 
                                  sup_elem->swap_plot + i, 
                                  ((void*)kpage) + i*BLOCK_SECTOR_SIZE);
+                     }
                      bitmap_set_multiple(
                         my_swap_table.used_map,
                         sup_elem->swap_plot,
@@ -289,11 +337,18 @@ page_fault (struct intr_frame *f)
                      sup_elem->kpage = kpage;
                      pagedir_set_dirty(sup_elem->cur_thread->pagedir,
                                        sup_elem->upage, true);
+                     pagedir_set_accessed(sup_elem->cur_thread->pagedir,
+                                         sup_elem->upage, true);
+                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_evict_lock);
                      return;
                   }
                }
          }
    }
+   ASSERT(found == 0);
+   lock_release(&my_sup_table_lock);
+   lock_release(&my_evict_lock);
    intr_disable();
 #endif
 
@@ -302,9 +357,11 @@ page_fault (struct intr_frame *f)
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */
   intr_enable ();
+  
 
   /* Count page faults. */
   page_fault_cnt++;
+
 
   /* Determine cause. */
   not_present = (f->error_code & PF_P) == 0;

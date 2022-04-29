@@ -160,6 +160,30 @@ palloc_free_multiple (void *pages, size_t page_cnt)
 
   ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
   bitmap_set_multiple (pool->used_map, page_idx, page_cnt, false);
+
+  lock_acquire(&my_frame_table_lock);
+  for(unsigned i=0;i<page_cnt;i++)
+  {
+    struct list_elem* e;
+    for(e=list_begin(&my_frame_table);
+        e!=list_end(&my_frame_table);
+        e=list_next(e))
+    {
+      struct my_frame_table_elem* frame_elem = 
+        list_entry(e, struct my_frame_table_elem, elem);
+      if(frame_elem->kpage == (void*)(pages+i*PGSIZE))
+      {
+        e=list_prev(e);
+        list_remove(&frame_elem->elem);
+        lock_release(&my_frame_table_lock);
+        free(frame_elem);
+        lock_acquire(&my_frame_table_lock);
+        printf("FREE: %p\n",pages + i*PGSIZE);
+      }
+    }
+  }
+  lock_release(&my_frame_table_lock);
+
 }
 
 /** Frees the page at PAGE. */
@@ -209,14 +233,30 @@ uint32_t* my_choose_evict()
     return NULL;
   }
 
-  uint32_t* ans = (list_entry(list_front(&my_frame_table),
-    struct my_frame_table_elem, elem))->kpage;
-  return ans;
+  lock_acquire(&my_frame_table_lock);
+  struct list_elem* e;
+  for(e=list_rbegin(&my_frame_table);
+      e!=list_rend(&my_frame_table);
+      e=list_prev(e))
+      {
+        struct my_frame_table_elem* frame_elem = 
+          list_entry(e, struct my_frame_table_elem, elem);
+        if(is_user_vaddr(frame_elem->upage))
+        {
+          uint32_t* ans = frame_elem->kpage;
+          lock_release(&my_frame_table_lock);
+          return ans;
+        }
+      }
+  lock_release(&my_frame_table_lock);
+  return NULL;
 }
 
 bool my_evict()
 {
+  lock_acquire(&my_evict_lock);
   uint32_t* evict_kpage = my_choose_evict();
+  printf("EVICT: %p\n",evict_kpage);
   bool need_to_swap = false;
   lock_acquire(&my_sup_table_lock);
   struct list_elem* e;
@@ -230,6 +270,7 @@ bool my_evict()
         list_entry(e,struct my_sup_table_elem, elem);
       if(sup_elem->kpage == evict_kpage)
       {
+        printf("FOUND!: %p\n",evict_kpage);
         uint32_t* pd = sup_elem->cur_thread->pagedir;
         void * upage = sup_elem->upage;
         if(pagedir_is_dirty(pd, upage))
@@ -248,6 +289,7 @@ bool my_evict()
     {
       lock_release(&my_swap_table.lock);
       lock_release(&my_sup_table_lock);
+      lock_release(&my_evict_lock);
       return false;
     }
     for(int i=0;i<8;i++)
@@ -285,5 +327,6 @@ bool my_evict()
   }
   lock_release(&my_sup_table_lock);
   palloc_free_page(evict_kpage);
+  lock_release(&my_evict_lock);
   return true;
 }

@@ -521,7 +521,7 @@ bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
   sup_elem->writable = writable;
   sup_elem->cur_thread = thread_current();
   sup_elem->kpage = NULL;
-  sup_elem->swap_plot = -1;
+  sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 0;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
@@ -547,7 +547,7 @@ bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
   sup_elem->writable = writable;
   sup_elem->cur_thread = thread_current();
   sup_elem->kpage = kpage;
-  sup_elem->swap_plot = -1;
+  sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 1;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
@@ -573,6 +573,11 @@ bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 {
+  if((read_bytes + zero_bytes) % PGSIZE != 0)
+  {
+    printf("file: %p, ofs: %d, upage: %p, read_bytes: %d, zero_bytes: %d, writable: %d\n",
+    file, ofs, upage, read_bytes, zero_bytes, writable);
+  }
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
@@ -654,7 +659,14 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
+      {
+        my_insert_sup_table_with_kpage(NULL,0,
+          (void*)(((uint8_t *) PHYS_BASE) - PGSIZE),PGSIZE
+          ,0,true,kpage);
+        pagedir_set_dirty(thread_current()->pagedir, 
+          (void *)(((uint8_t *) PHYS_BASE) - PGSIZE),true);
         *esp = PHYS_BASE;
+      }
       else
         palloc_free_page (kpage);
     }
@@ -677,14 +689,20 @@ install_page (void *upage, void *kpage, bool writable)
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
-  int ans = (pagedir_get_page (t->pagedir, upage) == NULL
-          && pagedir_set_page (t->pagedir, upage, kpage, writable));
+  int ans1 = (pagedir_get_page (t->pagedir, upage) == NULL);
+  ASSERT(ans1);
+  int ans2 =  pagedir_set_page (t->pagedir, upage, kpage, writable);
+  int ans = (ans1 && ans2);
   if(ans)
   {
     if(!my_insert_frame_table(upage, kpage))
     {
       return false;
     }
+  }
+  else
+  {
+    printf("ans1: %d,ans2: %d\n",ans1,ans2);
   }
   return ans;
 }
@@ -694,6 +712,7 @@ bool my_insert_frame_table(void *upage, void *kpage)
     malloc(sizeof(struct my_frame_table_elem));
   if(frame_elem == NULL)
   {
+    ASSERT(frame_elem != NULL);
     return false;
   }
   frame_elem->kpage=kpage;
@@ -701,6 +720,7 @@ bool my_insert_frame_table(void *upage, void *kpage)
   lock_acquire(&my_frame_table_lock);
   list_push_front(&my_frame_table ,&frame_elem->elem);
   lock_release(&my_frame_table_lock);
+  printf("INSERT FRAME: u-%p, p-%p\n",upage,kpage);
   return true;
 }
 void my_delete_sup_elem_free_kpage_no_lock(
