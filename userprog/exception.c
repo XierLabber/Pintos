@@ -279,7 +279,8 @@ page_fault (struct intr_frame *f)
          {
             struct my_sup_table_elem* sup_elem = 
                list_entry(e, struct my_sup_table_elem, elem);
-            if(sup_elem->upage == fault_upage)
+            if(sup_elem->upage == fault_upage &&
+               sup_elem->cur_thread == cur_thread)
                {
                   found = 1;
                   if(sup_elem->swap_plot == MY_NO_PLOT)
