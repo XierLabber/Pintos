@@ -116,6 +116,11 @@ kill (struct intr_frame *f)
 
 int my_load_file(struct my_sup_table_elem* sup_elem)
 {
+   int flag = lock_held_by_current_thread(&my_files_thread_lock);
+   if(!flag)
+   {
+      lock_acquire(&my_files_thread_lock);
+   }
    lock_acquire(&my_evict_lock);
    struct file * file = sup_elem->file;
    off_t ofs = sup_elem->ofs;
@@ -154,21 +159,16 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
 
       /* Load this page. */
       int ans;
-      if(!lock_held_by_current_thread(&my_files_thread_lock))
-      {
-         lock_acquire(&my_files_thread_lock);
-         ans = file_read (file, kpage, page_read_bytes);
-         lock_release(&my_files_thread_lock);
-      }
-      else
-      {
-         ans = file_read (file, kpage, page_read_bytes);
-      }
+      ans = file_read (file, kpage, page_read_bytes);
       if (ans != (int) page_read_bytes)
         {
           my_delete_mul_sup_free_kpage(u_start,upage);
           palloc_free_page (kpage);
           lock_release(&my_evict_lock);
+          if(!flag)
+          {
+            lock_release(&my_files_thread_lock);
+          }
          printf("LOAD FAILED!2\n");
          printf("NEED TO READ %d BYTES, HAVE READ %d BYTES!\n", (int)page_read_bytes, ans);
          printf("FILE: %p, UPAGE: %p\n",file,upage);
@@ -182,6 +182,10 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
           my_delete_mul_sup_free_kpage(u_start,upage);
           palloc_free_page (kpage);
           lock_release(&my_evict_lock);
+          if(!flag)
+          {
+            lock_release(&my_files_thread_lock);
+          }
          printf("LOAD FAILED!3\n");
           return false; 
         }
@@ -196,6 +200,10 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
            my_delete_mul_sup_free_kpage(u_start,upage);
            palloc_free_page (kpage);
            lock_release(&my_evict_lock);
+           if(!flag)
+           {
+             lock_release(&my_files_thread_lock);
+           }
          printf("LOAD FAILED!4\n");
            return false; 
          }
@@ -208,6 +216,10 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
       upage += PGSIZE;
     }
     lock_release(&my_evict_lock);
+    if(!flag)
+    {
+       lock_release(&my_files_thread_lock);
+    }
   return true;
 }
 #endif
