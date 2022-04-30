@@ -720,7 +720,6 @@ bool my_insert_frame_table(void *upage, void *kpage)
   lock_acquire(&my_frame_table_lock);
   list_push_front(&my_frame_table ,&frame_elem->elem);
   lock_release(&my_frame_table_lock);
-  printf("INSERT FRAME: u-%p, p-%p\n",upage,kpage);
   return true;
 }
 void my_delete_sup_elem_free_kpage_no_lock(

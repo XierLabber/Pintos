@@ -178,7 +178,6 @@ palloc_free_multiple (void *pages, size_t page_cnt)
         lock_release(&my_frame_table_lock);
         free(frame_elem);
         lock_acquire(&my_frame_table_lock);
-        printf("FREE: %p\n",pages + i*PGSIZE);
       }
     }
   }
@@ -256,7 +255,6 @@ bool my_evict()
 {
   lock_acquire(&my_evict_lock);
   uint32_t* evict_kpage = my_choose_evict();
-  printf("EVICT: %p\n",evict_kpage);
   bool need_to_swap = false;
   lock_acquire(&my_sup_table_lock);
   struct list_elem* e;
@@ -270,7 +268,6 @@ bool my_evict()
         list_entry(e,struct my_sup_table_elem, elem);
       if(sup_elem->kpage == evict_kpage)
       {
-        printf("FOUND!: %p\n",evict_kpage);
         uint32_t* pd = sup_elem->cur_thread->pagedir;
         void * upage = sup_elem->upage;
         if(pagedir_is_dirty(pd, upage))

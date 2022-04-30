@@ -125,8 +125,6 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
    uint32_t zero_bytes = sup_elem->zero_bytes; 
    bool writable = sup_elem->writable;
 
-   printf("LOAD: %p\n",file);
-
    lock_acquire(&my_sup_table_lock);
    list_remove(&sup_elem->elem);
    lock_release(&my_sup_table_lock);
@@ -155,9 +153,17 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
       }
 
       /* Load this page. */
-      lock_acquire(&my_files_thread_lock);
-      int ans = file_read (file, kpage, page_read_bytes);
-      lock_release(&my_files_thread_lock);
+      int ans;
+      if(!lock_held_by_current_thread(&my_files_thread_lock))
+      {
+         lock_acquire(&my_files_thread_lock);
+         ans = file_read (file, kpage, page_read_bytes);
+         lock_release(&my_files_thread_lock);
+      }
+      else
+      {
+         ans = file_read (file, kpage, page_read_bytes);
+      }
       if (ans != (int) page_read_bytes)
         {
           my_delete_mul_sup_free_kpage(u_start,upage);
@@ -236,7 +242,7 @@ page_fault (struct intr_frame *f)
   struct thread* cur_thread = thread_current();
 
 #ifdef VM
-   lock_acquire(&my_evict_lock);
+  lock_acquire(&my_evict_lock);
   void* fault_upage = pg_round_down(fault_addr);
   int flag = 1;
   int found = 0;
@@ -255,7 +261,6 @@ page_fault (struct intr_frame *f)
             sup_elem->exist == 0)
             {
                found = 1;
-               printf("REACH HERE!1, %p, FILE: %p\n",sup_elem->upage,sup_elem->file);
                lock_release(&my_sup_table_lock);
                lock_release(&my_evict_lock);
                if(!my_load_file(sup_elem))
@@ -280,12 +285,12 @@ page_fault (struct intr_frame *f)
             struct my_sup_table_elem* sup_elem = 
                list_entry(e, struct my_sup_table_elem, elem);
             if(sup_elem->upage == fault_upage &&
-               sup_elem->cur_thread == cur_thread)
+               sup_elem->cur_thread == cur_thread &&
+               sup_elem->kpage == NULL)
                {
                   found = 1;
                   if(sup_elem->swap_plot == MY_NO_PLOT)
                   {
-                     printf("REACH HERE!2, %p\n",sup_elem->upage);
                      list_remove(&sup_elem->elem);
                      lock_release(&my_sup_table_lock);
                      lock_release(&my_evict_lock);
@@ -309,7 +314,6 @@ page_fault (struct intr_frame *f)
                   }
                   else
                   {
-                     printf("REACH HERE!3, %p\n",sup_elem->upage);
                      lock_release(&my_sup_table_lock);
                      lock_release(&my_evict_lock);
                      uint8_t *kpage = palloc_get_page (PAL_USER);
