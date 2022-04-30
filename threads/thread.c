@@ -1064,7 +1064,8 @@ struct file* my_get_delete_exec_file(struct thread* t)
     {
       struct my_exec_file* mef = 
         list_entry(e, struct my_exec_file, elem);
-      if(strcmp(mef->file_name, t->name) == 0)
+      if(strcmp(mef->file_name, t->name) == 0 &&
+        mef->cur_thread == t)
       {
         list_remove(e);
         lock_release(&my_files_thread_lock);

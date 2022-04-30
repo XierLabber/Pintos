@@ -170,6 +170,8 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
           palloc_free_page (kpage);
           lock_release(&my_evict_lock);
          printf("LOAD FAILED!2\n");
+         printf("NEED TO READ %d BYTES, HAVE READ %d BYTES!\n", (int)page_read_bytes, ans);
+         printf("FILE: %p, UPAGE: %p\n",file,upage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -351,7 +353,10 @@ page_fault (struct intr_frame *f)
                }
          }
    }
-   ASSERT(found == 0);
+   if(found != 0)
+   {
+      printf("I FOUND THIS UPAGE, BUT SOMEHOW FAILED!\n");
+   }
    lock_release(&my_sup_table_lock);
    lock_release(&my_evict_lock);
    intr_disable();

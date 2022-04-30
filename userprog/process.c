@@ -206,8 +206,10 @@ process_exit (void)
 
   if(the_file!=NULL)
   {
+    lock_acquire(&my_files_thread_lock);
     file_allow_write(the_file);
     file_close(the_file);
+    lock_release(&my_files_thread_lock);
   }
 
 
@@ -357,6 +359,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
   struct my_exec_file* mef=malloc(sizeof(struct my_exec_file));
   mef->the_file=file;
+  mef->cur_thread = t;
   strlcpy(mef->file_name, file_name, 16);
   list_push_back(&my_exec_files, &mef->elem);
   file_deny_write(file);

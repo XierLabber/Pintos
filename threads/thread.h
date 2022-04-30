@@ -129,6 +129,7 @@ struct my_son_thread
 struct my_exec_file
 {
    char file_name[16];
+   struct thread* cur_thread;
    struct file* the_file;
    struct list_elem elem;
 };
