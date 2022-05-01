@@ -14,6 +14,8 @@
 #include "lib/kernel/list.h"
 #include "devices/input.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
+#include "userprog/pagedir.h"
 
 #define MY_TOTAL_SYSCALL_FUNC_NUM 20
 
@@ -23,7 +25,9 @@ my_sys_func my_syscall_functions[MY_TOTAL_SYSCALL_FUNC_NUM];
 
 static void syscall_handler (struct intr_frame *);
 
-void my_filter_buffer(char* the_buffer, unsigned the_size);
+void my_filter_buffer(char* the_buffer, 
+                      unsigned the_size, 
+                      struct intr_frame *);
 void my_get_args(struct intr_frame *f, int arg_num, uint32_t* argv);
 void my_return(uint32_t x, struct intr_frame *f);
 void my_sys_halt(struct intr_frame *f UNUSED);
@@ -41,6 +45,7 @@ void my_sys_tell(struct intr_frame *);
 void my_sys_close(struct intr_frame *);
 bool my_judge_ptr(const void* p);
 void my_ptr_filter(const void* ptr);
+bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f);
 
 void
 syscall_init (void) 
@@ -244,14 +249,18 @@ void my_sys_filesize(struct intr_frame *f)
   return;
 }
 
-void my_filter_buffer(char* the_buffer, unsigned the_size)
+void my_filter_buffer(char* the_buffer, 
+                      unsigned the_size,
+                      struct intr_frame * f)
 {
-  my_ptr_filter(the_buffer);
+  if(!my_judge_ptr_in_stack(the_buffer, f))
+    my_ptr_filter(the_buffer);
   unsigned start_pg_no = pg_no(the_buffer);
   unsigned end_pg_no = pg_no(the_buffer + the_size);
   for(unsigned i=start_pg_no + 1;i <= end_pg_no;i++)
   {
-    my_ptr_filter((void *)(i<<PGBITS));
+    if(!my_judge_ptr_in_stack((void *)(i<<PGBITS), f))
+      my_ptr_filter((void *)(i<<PGBITS));
   }
 }
 
@@ -263,7 +272,7 @@ void my_sys_read(struct intr_frame *f)
   char* the_buffer = (char*)the_args[1];
   unsigned the_size = (unsigned)the_args[2];
   
-  my_filter_buffer(the_buffer, the_size);
+  my_filter_buffer(the_buffer, the_size, f);
   void* upage = (void*)((pg_no(the_buffer))<<PGBITS);
   struct thread* cur_thread = thread_current();
   lock_acquire(&my_sup_table_lock);
@@ -327,7 +336,7 @@ void my_sys_write(struct intr_frame *f)
   char* the_buffer=(char*)the_args[1];
   unsigned the_size=(unsigned)the_args[2];
 
-  my_filter_buffer(the_buffer, the_size);
+  my_filter_buffer(the_buffer, the_size, f);
 
   if(the_fd==1)
   {
@@ -406,6 +415,7 @@ bool my_judge_ptr(const void* p)
   }
   
   struct list_elem* e;
+  lock_acquire(&my_sup_table_lock);
   for(e=list_begin(&my_sup_table);
       e!=list_end(&my_sup_table);
       e=list_next(e))
@@ -422,9 +432,11 @@ bool my_judge_ptr(const void* p)
             sup_elem->read_bytes + sup_elem->zero_bytes) &&
             thread_current() == sup_elem->cur_thread)
             {
+              lock_release(&my_sup_table_lock);
               return true;
             }
       }
+  lock_release(&my_sup_table_lock);
 
   void* my_tmp = 
     pagedir_get_page(
@@ -454,4 +466,66 @@ void my_ptr_filter(const void* ptr)
     thread_exit();
   }
   return;
+}
+
+bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f)
+{
+  if (is_user_vaddr(p) && (uint32_t)p >= (uint32_t)f->esp)
+  {
+    bool ans = false;  
+    struct list_elem* e;
+    lock_acquire(&my_sup_table_lock);
+    for(e=list_begin(&my_sup_table);
+        e!=list_end(&my_sup_table);
+        e=list_next(e))
+        {
+           struct my_sup_table_elem* sup_elem = 
+              list_entry(e, struct my_sup_table_elem, elem);
+            //printf("%0x,%0x,%0x\n",p,sup_elem->upage,sup_elem->upage + sup_elem->read_bytes);
+           if(p>=(void *)sup_elem->upage && 
+              p<(void*)(sup_elem->upage + 
+              sup_elem->read_bytes + sup_elem->zero_bytes) &&
+              thread_current() == sup_elem->cur_thread)
+              {
+                ans = true;
+                break;
+              }
+        }
+    lock_release(&my_sup_table_lock);
+    if(ans == false)
+    {
+      uint8_t *kpage;
+      bool success = false;
+      void* fault_upage = pg_round_down(p);
+      struct thread* cur_thread = thread_current();
+
+      kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+      if (kpage != NULL) 
+         {
+            success = install_page (fault_upage, kpage, true);
+            if (success)
+            {
+               if(!my_insert_sup_table_with_kpage(NULL,0,
+                     (void*)fault_upage, PGSIZE
+                     ,0,true,kpage))
+                  {
+                     palloc_free_page (kpage);
+                     return false;
+                  }
+               lock_acquire(&cur_thread->my_stack_frame_num_lock);
+               cur_thread->my_stack_frame_num++;
+               lock_release(&cur_thread->my_stack_frame_num_lock);
+               pagedir_set_dirty(cur_thread->pagedir, 
+                  (void *)fault_upage,true);
+            }
+            else
+            {
+              palloc_free_page (kpage);
+              return false;
+            }
+         }
+    }
+    return true;
+  }
+  return false;
 }

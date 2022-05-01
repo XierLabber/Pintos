@@ -12,6 +12,8 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static int my_judge_is_stack_request(struct intr_frame *f,
+                                      void* uaddr);
 
 /** Registers handlers for interrupts that can be caused by user
    programs.
@@ -369,6 +371,39 @@ page_fault (struct intr_frame *f)
    {
       printf("I FOUND THIS UPAGE, BUT SOMEHOW FAILED!\n");
    }
+   
+   if(my_judge_is_stack_request(f,fault_addr))
+   {
+      lock_release(&my_sup_table_lock);
+      lock_release(&my_evict_lock);
+
+      uint8_t *kpage;
+      bool success = false;
+
+      kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+      if (kpage != NULL) 
+         {
+            success = install_page (fault_upage, kpage, true);
+            if (success)
+            {
+               if(!my_insert_sup_table_with_kpage(NULL,0,
+                     (void*)fault_upage, PGSIZE
+                     ,0,true,kpage))
+                  {
+                     palloc_free_page (kpage);
+                     return;
+                  }
+               lock_acquire(&cur_thread->my_stack_frame_num_lock);
+               cur_thread->my_stack_frame_num++;
+               lock_release(&cur_thread->my_stack_frame_num_lock);
+               pagedir_set_dirty(cur_thread->pagedir, 
+                  (void *)fault_upage,true);
+            }
+            else
+            palloc_free_page (kpage);
+         }
+      return;
+   }
    lock_release(&my_sup_table_lock);
    lock_release(&my_evict_lock);
    intr_disable();
@@ -401,3 +436,22 @@ page_fault (struct intr_frame *f)
   kill (f);
 }
 
+static 
+int my_judge_is_stack_request(struct intr_frame *f, void* uaddr)
+{
+   struct thread* cur_thread = thread_current();
+   lock_acquire(&cur_thread->my_stack_frame_num_lock);
+   bool ans = cur_thread->my_stack_frame_num < 
+      MY_STACK_FRAME_NUM_THRESHOLD;
+   lock_release(&cur_thread->my_stack_frame_num_lock);
+   if(!ans)
+   {
+      return false;
+   }
+   void* stk_pointer = (void *)f->esp;
+   int flag = (((uint32_t)uaddr == (uint32_t)stk_pointer - 4 ||
+              (uint32_t)uaddr == (uint32_t)stk_pointer - 32) ||
+              (((uint32_t)uaddr < (uint32_t) PHYS_BASE) && 
+              (uint32_t)uaddr > (uint32_t)stk_pointer));
+   return flag;
+}

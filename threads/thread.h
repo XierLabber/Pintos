@@ -159,6 +159,9 @@ struct thread
     int my_exit_status;
 
     struct list my_files_list;         /**< In ascending fd order   */
+    
+    int my_stack_frame_num;
+    struct lock my_stack_frame_num_lock;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

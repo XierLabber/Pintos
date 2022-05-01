@@ -10,6 +10,7 @@
 
 #define MY_NO_PLOT 0xffffff
 #define MY_STK_IDX 1
+#define MY_STACK_FRAME_NUM_THRESHOLD 2048
 
 struct my_frame_table_elem
 {

@@ -630,6 +630,8 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init(&(t->my_sons_list));
   lock_init(&(t->my_sons_list_lock));
 #endif
+  lock_init(&t->my_stack_frame_num_lock);
+  t->my_stack_frame_num = 0;
   t->my_waiting_lock=NULL;
   t->magic = THREAD_MAGIC;
 

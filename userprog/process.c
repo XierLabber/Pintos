@@ -663,10 +663,18 @@ setup_stack (void **esp)
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
       {
-        my_insert_sup_table_with_kpage(NULL,0,
-          (void*)(((uint8_t *) PHYS_BASE) - PGSIZE),PGSIZE
-          ,0,true,kpage);
-        pagedir_set_dirty(thread_current()->pagedir, 
+        if(!my_insert_sup_table_with_kpage(NULL,0,
+            (void*)(((uint8_t *) PHYS_BASE) - PGSIZE),PGSIZE
+            ,0,true,kpage))
+          {
+            palloc_free_page (kpage);
+            return false;
+          }
+        struct thread* cur_thread = thread_current();
+        lock_acquire(&cur_thread->my_stack_frame_num_lock);
+        cur_thread->my_stack_frame_num++;
+        lock_release(&cur_thread->my_stack_frame_num_lock);
+        pagedir_set_dirty(cur_thread->pagedir, 
           (void *)(((uint8_t *) PHYS_BASE) - PGSIZE),true);
         *esp = PHYS_BASE;
       }
