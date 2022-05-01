@@ -13,7 +13,7 @@
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 
-#define MY_MAX_TEST_TIME 10
+#define MY_MAX_TEST_TIME 64
 
 /** Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
@@ -159,11 +159,11 @@ palloc_free_multiple (void *pages, size_t page_cnt)
 #ifndef NDEBUG
   memset (pages, 0xcc, PGSIZE * page_cnt);
 #endif
+  lock_acquire(&my_frame_table_lock);
 
   ASSERT (bitmap_all (pool->used_map, page_idx, page_cnt));
   bitmap_set_multiple (pool->used_map, page_idx, page_cnt, false);
 
-  lock_acquire(&my_frame_table_lock);
   for(unsigned i=0;i<page_cnt;i++)
   {
     struct list_elem* e;
@@ -242,9 +242,11 @@ uint32_t* my_choose_evict()
       {
         struct my_frame_table_elem* frame_elem = 
           list_entry(e, struct my_frame_table_elem, elem);
-        if(is_user_vaddr(frame_elem->upage))
+        if(is_user_vaddr(frame_elem->upage) && 
+           frame_elem->can_be_evict)
         {
           uint32_t* ans = frame_elem->kpage;
+          frame_elem->can_be_evict = 0;
           lock_release(&my_frame_table_lock);
           return ans;
         }

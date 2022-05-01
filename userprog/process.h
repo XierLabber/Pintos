@@ -19,6 +19,8 @@ struct my_frame_table_elem
 {
     void * upage;
     void * kpage;
+    struct thread* cur_thread;
+    int can_be_evict;
     struct list_elem elem;
 };
 

@@ -258,6 +258,10 @@ page_fault (struct intr_frame *f)
   struct thread* cur_thread = thread_current();
 
 #ifdef VM
+  int need_file_lock_flag = 
+      !lock_held_by_current_thread(&my_files_thread_lock);
+  if(need_file_lock_flag)
+      lock_acquire(&my_files_thread_lock);
   lock_acquire(&my_evict_lock);
   void* fault_upage = pg_round_down(fault_addr);
   int flag = 1;
@@ -288,6 +292,8 @@ page_fault (struct intr_frame *f)
                }
                else
                {
+                  if(need_file_lock_flag)
+                     lock_release(&my_files_thread_lock);
                   return;
                }
             }
@@ -295,17 +301,17 @@ page_fault (struct intr_frame *f)
                 sup_elem->upage == fault_upage &&
                 sup_elem->is_mmaped == MY_IS_MMAPED)
                 {
-                   lock_acquire(&my_files_thread_lock);
                    memset(sup_elem->kpage, 0, PGSIZE);
                    file_seek(sup_elem->file, sup_elem->ofs);
                    file_read(sup_elem->file, sup_elem->kpage,
                              sup_elem->read_bytes);
-                   lock_release(&my_files_thread_lock);
                    ASSERT(install_page (sup_elem->upage, 
                                         sup_elem->kpage, 
                                         sup_elem->writable));
                    lock_release(&my_evict_lock);
                    lock_release(&my_sup_table_lock);
+                   if(need_file_lock_flag)
+                       lock_release(&my_files_thread_lock);
                    return;
                 }
       }
@@ -343,6 +349,8 @@ page_fault (struct intr_frame *f)
                      }
                      lock_release(&my_sup_table_lock);
                      lock_release(&my_evict_lock);
+                     if(need_file_lock_flag)
+                        lock_release(&my_files_thread_lock);
                      return;
                   }
                   else
@@ -379,6 +387,8 @@ page_fault (struct intr_frame *f)
                                          sup_elem->upage, true);
                      lock_release(&my_sup_table_lock);
                      lock_release(&my_evict_lock);
+                     if(need_file_lock_flag)
+                        lock_release(&my_files_thread_lock);
                      return;
                   }
                }
@@ -408,6 +418,8 @@ page_fault (struct intr_frame *f)
                      ,0,true,kpage,MY_NOT_MMAPED))
                   {
                      palloc_free_page (kpage);
+                     if(need_file_lock_flag)
+                        lock_release(&my_files_thread_lock);
                      return;
                   }
                lock_acquire(&cur_thread->my_stack_frame_num_lock);
@@ -419,10 +431,14 @@ page_fault (struct intr_frame *f)
             else
             palloc_free_page (kpage);
          }
+      if(need_file_lock_flag)
+         lock_release(&my_files_thread_lock);
       return;
    }
    lock_release(&my_sup_table_lock);
    lock_release(&my_evict_lock);
+   if(need_file_lock_flag)
+      lock_release(&my_files_thread_lock);
    intr_disable();
 #endif
 

@@ -224,14 +224,19 @@ void my_sys_open(struct intr_frame *f)
   char* file_name;
   my_get_args(f,1,(uint32_t *)(&file_name));
   my_ptr_filter(file_name);
-  lock_acquire(&my_files_thread_lock);
+  int flag = lock_held_by_current_thread(&my_files_thread_lock);
+  if(!flag)
+    lock_acquire(&my_files_thread_lock);
   struct file* the_file = filesys_open(file_name);
-  lock_release(&my_files_thread_lock);
+  if(!flag)
+    lock_release(&my_files_thread_lock);
   if(the_file!=NULL)
   {
-    lock_acquire(&my_files_thread_lock);
+    if(!flag)
+      lock_acquire(&my_files_thread_lock);
     int fd = my_insert_file(the_file,thread_current());
-    lock_release(&my_files_thread_lock);
+    if(!flag)
+      lock_release(&my_files_thread_lock);
     my_return(fd,f);
     return;
   }
@@ -274,6 +279,7 @@ void my_filter_buffer(char* the_buffer,
 
 void my_sys_read(struct intr_frame *f)
 {
+  int flag = lock_held_by_current_thread(&my_files_thread_lock);
   uint32_t the_args[3];
   my_get_args(f,3,the_args);
   int the_fd = (int)the_args[0];
@@ -319,6 +325,33 @@ void my_sys_read(struct intr_frame *f)
   }
   else
   {
+    *(char *)the_buffer = *(char *)the_buffer;
+    for(void *knock = (void *)((uint32_t)pg_round_down(the_buffer) + PGSIZE);
+        (uint32_t)knock <= (uint32_t)(the_buffer + the_size - 1);
+        knock = (void *)((uint32_t)knock + PGSIZE))
+      {
+        *(char *)knock = *(char *)knock;
+      }
+    lock_acquire(&my_frame_table_lock);
+    for(e=list_begin(&my_frame_table);
+        e!=list_end(&my_frame_table);
+        e=list_next(e))
+      {
+        struct my_frame_table_elem* frame_elem = 
+          list_entry(e, struct my_frame_table_elem, elem);
+        if(frame_elem->cur_thread == cur_thread &&
+           frame_elem->upage >= pg_round_down(the_buffer) &&
+           frame_elem->upage <= 
+              pg_round_down((void*)(the_buffer + the_size - 1)))
+        {
+          frame_elem->can_be_evict = 0;
+          // be sure that this page is not evicted here
+          *(char *)frame_elem->upage
+             =*(char *)frame_elem->upage; 
+        }
+      }
+    lock_release(&my_frame_table_lock);
+
     struct file* the_file=my_get_file(the_fd, 
                          thread_current());
     if(the_file == NULL)
@@ -326,9 +359,27 @@ void my_sys_read(struct intr_frame *f)
       my_return((uint32_t)(-1),f);
       return;
     }
-    lock_acquire(&my_files_thread_lock);
+    if(!flag)
+      lock_acquire(&my_files_thread_lock);
     off_t ans = file_read(the_file, the_buffer, (off_t)the_size);
-    lock_release(&my_files_thread_lock);
+    if(!flag)  
+      lock_release(&my_files_thread_lock);
+    lock_acquire(&my_frame_table_lock);
+    for(e=list_begin(&my_frame_table);
+        e!=list_end(&my_frame_table);
+        e=list_next(e))
+      {
+        struct my_frame_table_elem* frame_elem = 
+          list_entry(e, struct my_frame_table_elem, elem);
+        if(frame_elem->cur_thread == cur_thread &&
+           frame_elem->upage >= pg_round_down(the_buffer) &&
+           frame_elem->upage <= 
+              pg_round_down((void*)(the_buffer + the_size - 1)))
+        {
+          frame_elem->can_be_evict = 1;
+        }
+      }
+    lock_release(&my_frame_table_lock);
     my_return((uint32_t)ans,f);
     return;
   }
@@ -337,6 +388,7 @@ void my_sys_read(struct intr_frame *f)
 
 void my_sys_write(struct intr_frame *f)
 {
+  int flag = lock_held_by_current_thread(&my_files_thread_lock);
   uint32_t the_args[3];
   my_get_args(f,3,the_args);
   
@@ -361,9 +413,11 @@ void my_sys_write(struct intr_frame *f)
       my_return((uint32_t)(-1),f);
       return;
     }
-    lock_acquire(&my_files_thread_lock);
+    if(!flag)
+      lock_acquire(&my_files_thread_lock);
     off_t ans = file_write(the_file, the_buffer, (off_t)the_size);
-    lock_release(&my_files_thread_lock);
+    if(!flag)  
+      lock_release(&my_files_thread_lock);
     my_return((uint32_t)ans, f);
     return;
   }
@@ -408,10 +462,13 @@ void my_sys_close(struct intr_frame *f)
     thread_current();
   struct file* the_file = 
     my_get_file(the_fd, the_thread);
-  lock_acquire(&my_files_thread_lock);
+  int flag = lock_held_by_current_thread(&my_files_thread_lock);
+  if(!flag)
+    lock_acquire(&my_files_thread_lock);
   file_close(the_file);
   my_remove_file(the_fd, the_thread);
-  lock_release(&my_files_thread_lock);
+  if(!flag)
+    lock_release(&my_files_thread_lock);
   return;
 }
 
@@ -593,27 +650,24 @@ void my_sys_mmap(struct intr_frame * f)
   int the_file_length = file_length(the_file);
   int need_pg_num = (the_file_length + PGSIZE - 1) / PGSIZE;
 
-  void* kpage = palloc_get_multiple(PAL_USER, need_pg_num);
-
-  if(kpage == NULL)
-  {
-    PANIC("PALLOC FAILED!\n");
-    my_return((uint32_t)MY_FALSE_MAPID,f);
-    return;
-  }
-
   lock_acquire(&cur_thread->my_mmap_table_lock);
   lock_acquire(&my_evict_lock);
   struct lock* file_lock = malloc(sizeof(struct lock));
   ASSERT(file_lock!=NULL);
   lock_init(file_lock);
   void* running_upage = the_addr;
-  void* running_kpage = kpage;
+  void* running_kpage;
   int running_file_length = the_file_length;
   int running_ofs = 0;
   int next_map_id = my_get_next_map_id(cur_thread);
   for(int i=0;i<need_pg_num;i++)
   {
+    lock_release(&cur_thread->my_mmap_table_lock);
+    lock_release(&my_evict_lock);
+    running_kpage = palloc_get_page(PAL_USER);
+    lock_acquire(&cur_thread->my_mmap_table_lock);
+    lock_acquire(&my_evict_lock);
+    ASSERT(running_kpage != NULL);
     int valid_bytes = (running_file_length > PGSIZE)?
       PGSIZE:running_file_length;
     bool result = my_insert_sup_table_with_kpage
@@ -637,7 +691,6 @@ void my_sys_mmap(struct intr_frame * f)
                         &mmap_elem->elem, my_cmp_mappings,
                         NULL);
     running_upage += PGSIZE;
-    running_kpage += PGSIZE;
     running_file_length -= valid_bytes;
     running_ofs += valid_bytes;
   }

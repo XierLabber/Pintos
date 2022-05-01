@@ -732,8 +732,10 @@ bool my_insert_frame_table(void *upage, void *kpage)
     ASSERT(frame_elem != NULL);
     return false;
   }
+  frame_elem->can_be_evict=1;
   frame_elem->kpage=kpage;
   frame_elem->upage=upage;
+  frame_elem->cur_thread = thread_current();
   lock_acquire(&my_frame_table_lock);
   list_push_front(&my_frame_table ,&frame_elem->elem);
   lock_release(&my_frame_table_lock);
