@@ -548,7 +548,7 @@ void my_sys_mmap(struct intr_frame * f)
   my_get_args(f, 2, the_args);
   the_fd = (int)the_args[0];
   the_addr = (void *)the_args[1];
-
+  
   if(the_fd == 0 || the_fd == 1)
   {
     my_return((uint32_t)MY_FALSE_MAPID,f);
@@ -565,12 +565,20 @@ void my_sys_mmap(struct intr_frame * f)
     return;
   }
 
+  if((uint32_t)the_addr < (uint32_t)PHYS_BASE &&
+     (uint32_t)the_addr >= (uint32_t)f->esp)
+  {
+    my_return((uint32_t)MY_FALSE_MAPID,f);
+    return;
+  }
+
   //my_ptr_filter(the_addr);
   if(!is_user_vaddr(the_addr) || 
      !is_user_vaddr((char *)(the_addr)+file_length(the_file)))
   {
     thread_exit();
   }
+  
 
   if(!my_judge_ok_to_mmap(the_file, the_addr))
   {
@@ -682,21 +690,23 @@ bool my_judge_ok_to_mmap(struct file* file, void* addr)
 
   struct list_elem* e;
   struct thread* cur_thread = thread_current();
-  lock_acquire(&cur_thread->my_mmap_table_lock);
-  for(e=list_begin(&cur_thread->my_mmap_table);
-      e!=list_end(&cur_thread->my_mmap_table);
+
+  lock_acquire(&my_sup_table_lock);
+  for(e=list_begin(&my_sup_table);
+      e!=list_end(&my_sup_table);
       e=list_next(e))
     {
-      struct my_mmap_table_elem* mmap_elem = 
-        list_entry(e, struct my_mmap_table_elem, elem);
-      if(mmap_elem->cur_thread == cur_thread &&
-         mmap_elem->upage == addr)
+      struct my_sup_table_elem* sup_elem = 
+        list_entry(e, struct my_sup_table_elem, elem);
+      if(sup_elem->cur_thread == cur_thread &&
+         sup_elem->upage == addr)
          {
-           lock_release(&cur_thread->my_mmap_table_lock);
+           lock_release(&my_sup_table_lock);
            return false;
          }
     }
-  lock_release(&cur_thread->my_mmap_table_lock);
+  lock_release(&my_sup_table_lock);
+
   return true;
 }
 
