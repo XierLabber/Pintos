@@ -11,6 +11,9 @@
 #define MY_NO_PLOT 0xffffff
 #define MY_STK_IDX 1
 #define MY_STACK_FRAME_NUM_THRESHOLD 2048
+#define MY_IS_MMAPED 1
+#define MY_NOT_MMAPED 0
+#define MY_FALSE_MAPID -1
 
 struct my_frame_table_elem
 {
@@ -36,6 +39,7 @@ struct my_sup_table_elem
     struct list_elem elem;
     block_sector_t swap_plot;
     int exist;
+    int is_mmaped;
 };
 
 struct list my_sup_table;
@@ -54,16 +58,29 @@ struct my_swap_table_t
 
 struct my_swap_table_t my_swap_table;
 
+struct my_mmap_table_elem
+{
+    void* upage;
+    void* kpage;
+    struct thread* cur_thread;
+    struct file* file;
+    int offset;
+    int mapid;
+    int valid_bytes;
+    struct list_elem elem;
+    struct lock* file_lock;
+};
 
 int my_page_initialized_flag;
 int my_tss_initialized_flag;
 int my_init_finish_flag;
 bool my_insert_frame_table(void *upage, void *kpage);
 bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
-              uint32_t read_bytes, uint32_t zero_bytes, bool writable);
+              uint32_t read_bytes, uint32_t zero_bytes, bool writable,
+              int is_mmaped);
 bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs, 
               uint8_t *upage, uint32_t read_bytes, uint32_t zero_bytes, 
-              bool writable, uint8_t *kpage);
+              bool writable, uint8_t *kpage, int is_mmaped);
 
 tid_t process_execute (const char *file_name);
 int process_wait (tid_t);
@@ -80,5 +97,8 @@ void my_delete_mul_sup_free_kpage(
 void my_delete_mul_sup_free_kpage_by_thread(void);
 void my_swap_table_init(void);
 block_sector_t my_get_swap_plot(void);
+int my_get_next_map_id(struct thread* cur_thread);
+void my_delete_mmap_file_in_list(struct list_elem* e,struct thread* t);
+void my_delete_mmap_table(struct thread* cur_thread);
 
 #endif /**< userprog/process.h */

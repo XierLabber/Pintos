@@ -13,6 +13,8 @@
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 
+#define MY_MAX_TEST_TIME 10
+
 /** Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
    hands out smaller chunks.
@@ -75,7 +77,7 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
   struct pool *pool = flags & PAL_USER ? &user_pool : &kernel_pool;
   void *pages;
   size_t page_idx;
-  int test_time = 10;
+  int test_time = MY_MAX_TEST_TIME;
 
   if (page_cnt == 0)
   {
@@ -256,6 +258,8 @@ bool my_evict()
   lock_acquire(&my_evict_lock);
   uint32_t* evict_kpage = my_choose_evict();
   bool need_to_swap = false;
+  bool is_mmapped = false;
+  struct thread* mapped_thread;
   lock_acquire(&my_sup_table_lock);
   struct list_elem* e;
   block_sector_t swap_plot;
@@ -274,38 +278,82 @@ bool my_evict()
         {
           need_to_swap = true;
         }
+        if(sup_elem->is_mmaped == MY_IS_MMAPED)
+        {
+          is_mmapped = true;
+          mapped_thread = sup_elem->cur_thread;
+        }
         pagedir_clear_page(pd, upage);
       }
     }
 
   if(need_to_swap)
   {
-    lock_acquire(&my_swap_table.lock);
-    swap_plot = my_get_swap_plot();
-    if(swap_plot == MY_NO_PLOT)
+    if(!is_mmapped)
     {
-      lock_release(&my_swap_table.lock);
-      lock_release(&my_sup_table_lock);
-      lock_release(&my_evict_lock);
-      return false;
-    }
-    for(int i=0;i<8;i++)
-    {
-      block_write(my_swap_table.b, swap_plot + i, ((void *)evict_kpage) + i*BLOCK_SECTOR_SIZE);
-    }
-    lock_release(&my_swap_table.lock);
-    for(e=list_begin(&my_sup_table);
-        e!=list_end(&my_sup_table);
-        e=list_next(e))
+      lock_acquire(&my_swap_table.lock);
+      swap_plot = my_get_swap_plot();
+      if(swap_plot == MY_NO_PLOT)
       {
-        struct my_sup_table_elem* sup_elem = 
-          list_entry(e,struct my_sup_table_elem, elem);
-        if(sup_elem->kpage == evict_kpage)
-        {
-          sup_elem->kpage = NULL;
-          sup_elem->swap_plot = swap_plot;
-        }
+        lock_release(&my_swap_table.lock);
+        lock_release(&my_sup_table_lock);
+        lock_release(&my_evict_lock);
+        return false;
       }
+      for(int i=0;i<8;i++)
+      {
+        block_write(my_swap_table.b, swap_plot + i, ((void *)evict_kpage) + i*BLOCK_SECTOR_SIZE);
+      }
+      lock_release(&my_swap_table.lock);
+      for(e=list_begin(&my_sup_table);
+          e!=list_end(&my_sup_table);
+          e=list_next(e))
+        {
+          struct my_sup_table_elem* sup_elem = 
+            list_entry(e,struct my_sup_table_elem, elem);
+          if(sup_elem->kpage == evict_kpage)
+          {
+            sup_elem->kpage = NULL;
+            sup_elem->swap_plot = swap_plot;
+          }
+        }
+    }
+    else
+    {
+      lock_acquire(&mapped_thread->my_mmap_table_lock);
+      struct list_elem* e;
+      for(e=list_begin(&mapped_thread->my_mmap_table);
+          e!=list_end(&mapped_thread->my_mmap_table);
+          e=list_next(e))
+        {
+          struct my_mmap_table_elem* mmap_elem = 
+            list_entry(e, struct my_mmap_table_elem, elem);
+          if(mmap_elem->kpage == evict_kpage)
+          {
+            lock_acquire(mmap_elem->file_lock);
+            file_seek(mmap_elem->file,mmap_elem->offset);
+            file_write(mmap_elem->file, 
+                       evict_kpage, 
+                       PGSIZE);
+            lock_release(mmap_elem->file_lock);
+            break;
+          }
+        }
+      lock_release(&mapped_thread->my_mmap_table_lock);
+      
+      for(e=list_begin(&my_sup_table);
+          e!=list_end(&my_sup_table);
+          e=list_next(e))
+        {
+          struct my_sup_table_elem* sup_elem = 
+            list_entry(e,struct my_sup_table_elem, elem);
+          if(sup_elem->kpage == evict_kpage)
+          {
+            sup_elem->kpage = NULL;
+            sup_elem->swap_plot = MY_NO_PLOT;
+          }
+        }
+    }
   }
   else
   {

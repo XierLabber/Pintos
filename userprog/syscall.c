@@ -45,7 +45,13 @@ void my_sys_tell(struct intr_frame *);
 void my_sys_close(struct intr_frame *);
 bool my_judge_ptr(const void* p);
 void my_ptr_filter(const void* ptr);
+void my_sys_mmap(struct intr_frame *);
+void my_sys_munmap(struct intr_frame *);
 bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f);
+bool my_judge_ok_to_mmap(struct file* the_file, void* addr);
+bool my_cmp_mappings(const struct list_elem* e1,
+                     const struct list_elem* e2,
+                     void* aux UNUSED);
 
 void
 syscall_init (void) 
@@ -76,6 +82,10 @@ syscall_init (void)
     &my_sys_tell;
   my_syscall_functions[SYS_CLOSE] = 
     &my_sys_close;
+  my_syscall_functions[SYS_MMAP] = 
+    &my_sys_mmap;
+  my_syscall_functions[SYS_MUNMAP] = 
+    &my_sys_munmap;
 
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
@@ -100,8 +110,6 @@ void my_return(uint32_t x, struct intr_frame *f)
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  //printf ("system call!\n");
-
   uint32_t* my_ptr = f->esp;
   my_ptr_filter(my_ptr);
 
@@ -507,7 +515,7 @@ bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f)
             {
                if(!my_insert_sup_table_with_kpage(NULL,0,
                      (void*)fault_upage, PGSIZE
-                     ,0,true,kpage))
+                     ,0,true,kpage, MY_NOT_MMAPED))
                   {
                      palloc_free_page (kpage);
                      return false;
@@ -528,4 +536,177 @@ bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f)
     return true;
   }
   return false;
+}
+
+void my_sys_mmap(struct intr_frame * f)
+{
+  uint32_t the_args[2];
+  int the_fd;
+  void* the_addr;
+  struct file* the_file;
+  struct thread* cur_thread = thread_current();
+  my_get_args(f, 2, the_args);
+  the_fd = (int)the_args[0];
+  the_addr = (void *)the_args[1];
+
+  if(the_fd == 0 || the_fd == 1)
+  {
+    my_return((uint32_t)MY_FALSE_MAPID,f);
+    return;
+  }
+
+  lock_acquire(&my_files_thread_lock);
+  the_file = my_get_file(the_fd, cur_thread);
+  lock_release(&my_files_thread_lock);
+
+  if(the_file == NULL)
+  {
+    my_return((uint32_t)MY_FALSE_MAPID,f);
+    return;
+  }
+
+  //my_ptr_filter(the_addr);
+  if(!is_user_vaddr(the_addr) || 
+     !is_user_vaddr((char *)(the_addr)+file_length(the_file)))
+  {
+    thread_exit();
+  }
+
+  if(!my_judge_ok_to_mmap(the_file, the_addr))
+  {
+    my_return((uint32_t)MY_FALSE_MAPID,f);
+    return;
+  }
+
+  the_file = file_reopen(the_file);
+
+  ASSERT(the_file!=NULL);
+
+  int the_file_length = file_length(the_file);
+  int need_pg_num = (the_file_length + PGSIZE - 1) / PGSIZE;
+
+  void* kpage = palloc_get_multiple(PAL_USER, need_pg_num);
+
+  if(kpage == NULL)
+  {
+    PANIC("PALLOC FAILED!\n");
+    my_return((uint32_t)MY_FALSE_MAPID,f);
+    return;
+  }
+
+  lock_acquire(&cur_thread->my_mmap_table_lock);
+  lock_acquire(&my_evict_lock);
+  struct lock* file_lock = malloc(sizeof(struct lock));
+  ASSERT(file_lock!=NULL);
+  lock_init(file_lock);
+  void* running_upage = the_addr;
+  void* running_kpage = kpage;
+  int running_file_length = the_file_length;
+  int running_ofs = 0;
+  int next_map_id = my_get_next_map_id(cur_thread);
+  for(int i=0;i<need_pg_num;i++)
+  {
+    int valid_bytes = (running_file_length > PGSIZE)?
+      PGSIZE:running_file_length;
+    bool result = my_insert_sup_table_with_kpage
+                              (the_file, running_ofs, 
+                               running_upage, valid_bytes,
+                               PGSIZE - valid_bytes, true, 
+                               running_kpage, MY_IS_MMAPED);
+    ASSERT(result);
+    struct my_mmap_table_elem* mmap_elem= 
+      malloc(sizeof(struct my_mmap_table_elem));
+    ASSERT(mmap_elem != NULL);
+    mmap_elem->cur_thread = cur_thread;
+    mmap_elem->file = the_file;
+    mmap_elem->mapid = next_map_id;
+    mmap_elem->upage = running_upage;
+    mmap_elem->kpage = running_kpage;
+    mmap_elem->offset = running_ofs;
+    mmap_elem->valid_bytes = valid_bytes;
+    mmap_elem->file_lock = file_lock;
+    list_insert_ordered(&cur_thread->my_mmap_table,
+                        &mmap_elem->elem, my_cmp_mappings,
+                        NULL);
+    running_upage += PGSIZE;
+    running_kpage += PGSIZE;
+    running_file_length -= valid_bytes;
+    running_ofs += valid_bytes;
+  }
+  lock_release(&my_evict_lock);
+  lock_release(&cur_thread->my_mmap_table_lock);
+  my_return((uint32_t)next_map_id,f);
+  return;
+}
+
+void my_sys_munmap(struct intr_frame * f)
+{
+  int the_map_id;
+  my_get_args(f,1,(uint32_t*)(&the_map_id));
+  struct thread* cur_thread = thread_current();
+  lock_acquire(&cur_thread->my_mmap_table_lock);
+  struct list_elem* e;
+  for(e=list_begin(&cur_thread->my_mmap_table);
+      e!=list_end(&cur_thread->my_mmap_table);
+      e=list_next(e))
+    {
+      struct my_mmap_table_elem* mmap_elem = 
+        list_entry(e, struct my_mmap_table_elem, elem);
+      if(mmap_elem->mapid >= the_map_id)
+      {
+        break;
+      }
+    }
+  my_delete_mmap_file_in_list(e, cur_thread);
+  lock_release(&cur_thread->my_mmap_table_lock);
+}
+
+bool my_judge_ok_to_mmap(struct file* file, void* addr)
+{
+  if(file == NULL)
+  {
+    return false;
+  }
+  if(addr == 0)
+  {
+    return false;
+  }
+  if(file_length(file) == 0)
+  {
+    return false;
+  }
+  if((uint32_t)addr % PGSIZE != 0)
+  {
+    return false;
+  }
+
+  struct list_elem* e;
+  struct thread* cur_thread = thread_current();
+  lock_acquire(&cur_thread->my_mmap_table_lock);
+  for(e=list_begin(&cur_thread->my_mmap_table);
+      e!=list_end(&cur_thread->my_mmap_table);
+      e=list_next(e))
+    {
+      struct my_mmap_table_elem* mmap_elem = 
+        list_entry(e, struct my_mmap_table_elem, elem);
+      if(mmap_elem->cur_thread == cur_thread &&
+         mmap_elem->upage == addr)
+         {
+           lock_release(&cur_thread->my_mmap_table_lock);
+           return false;
+         }
+    }
+  lock_release(&cur_thread->my_mmap_table_lock);
+  return true;
+}
+
+bool my_cmp_mappings(const struct list_elem* e1,
+                     const struct list_elem* e2,
+                     void* aux UNUSED)
+{
+  struct my_mmap_table_elem* mmap_elem1 = 
+    list_entry(e1, struct my_mmap_table_elem, elem);
+  struct my_mmap_table_elem* mmap_elem2 = 
+    list_entry(e2, struct my_mmap_table_elem, elem);
+  return mmap_elem1->mapid < mmap_elem2->mapid;
 }

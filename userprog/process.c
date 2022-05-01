@@ -225,6 +225,9 @@ process_exit (void)
          directory before destroying the process's page
          directory, or our active page directory will be one
          that's been freed (and cleared). */
+      lock_acquire(&cur->my_mmap_table_lock);
+      my_delete_mmap_table(cur);
+      lock_release(&cur->my_mmap_table_lock);
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       my_delete_mul_sup_free_kpage_by_thread();
@@ -508,7 +511,8 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
 
 // the exist bit will not set to 1
 bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
-              uint32_t read_bytes, uint32_t zero_bytes, bool writable)
+              uint32_t read_bytes, uint32_t zero_bytes, bool writable,
+              int is_mmaped)
 {
   struct my_sup_table_elem *sup_elem = 
     malloc(sizeof(struct my_sup_table_elem));
@@ -526,6 +530,7 @@ bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
   sup_elem->kpage = NULL;
   sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 0;
+  sup_elem->is_mmaped = is_mmaped;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
   lock_release(&my_sup_table_lock);
@@ -534,7 +539,7 @@ bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
 
 bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
              uint8_t *upage, uint32_t read_bytes, uint32_t zero_bytes, 
-             bool writable, uint8_t *kpage)
+             bool writable, uint8_t *kpage, int is_mmaped)
 {
   struct my_sup_table_elem *sup_elem = 
     malloc(sizeof(struct my_sup_table_elem));
@@ -552,6 +557,7 @@ bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
   sup_elem->kpage = kpage;
   sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 1;
+  sup_elem->is_mmaped = is_mmaped;
   lock_acquire(&my_sup_table_lock);
   list_push_back(&my_sup_table, &sup_elem->elem);
   lock_release(&my_sup_table_lock);
@@ -597,7 +603,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
       
       if(!my_insert_sup_table(file,ofs,upage,page_read_bytes,
-                              page_zero_bytes,writable))
+                              page_zero_bytes,writable, MY_NOT_MMAPED))
         {
           return false;
         }
@@ -665,7 +671,7 @@ setup_stack (void **esp)
       {
         if(!my_insert_sup_table_with_kpage(NULL,0,
             (void*)(((uint8_t *) PHYS_BASE) - PGSIZE),PGSIZE
-            ,0,true,kpage))
+            ,0,true,kpage, MY_NOT_MMAPED))
           {
             palloc_free_page (kpage);
             return false;
@@ -811,4 +817,88 @@ block_sector_t my_get_swap_plot(void)
     swap_plot = MY_NO_PLOT;
 
   return swap_plot;
+}
+
+// will not use lock
+int my_get_next_map_id(struct thread * t)
+{
+  struct list_elem *e;
+
+  if(list_empty(&t->my_mmap_table))
+  {
+    return 1;
+  }
+
+  for (e = list_begin (&t->my_mmap_table); 
+       e != list_end (&t->my_mmap_table);
+       e = list_next (e))
+    {
+      struct my_mmap_table_elem *mmap_elem =
+       list_entry (e, struct my_mmap_table_elem, elem);
+      struct list_elem *ne = list_next(e);
+      if(ne == list_end (&t->my_mmap_table))
+      {
+        return mmap_elem->mapid+1;
+      }
+      struct my_mmap_table_elem *next_mmap_elem = 
+        list_entry (ne, struct my_mmap_table_elem, elem);
+      if(next_mmap_elem->mapid > mmap_elem->mapid+1)
+      {
+        return mmap_elem->mapid+1;
+      }
+    }
+  return -1;
+}
+
+// need mmap table lock before called
+void my_delete_mmap_file_in_list(struct list_elem* e,
+                                 struct thread* cur_thread)
+{
+  struct my_mmap_table_elem* mmap_elem = 
+    list_entry(e, struct my_mmap_table_elem, elem);
+  int the_map_id = mmap_elem->mapid;
+  struct file* the_file = mmap_elem->file;
+  struct lock* the_lock = mmap_elem->file_lock;
+  ASSERT(the_lock!=NULL);
+  lock_acquire(the_lock);
+  for( ;
+      e!=list_end(&cur_thread->my_mmap_table);
+      e=list_next(e))
+    {
+      mmap_elem = 
+        list_entry(e, struct my_mmap_table_elem, elem);
+      if(mmap_elem->mapid > the_map_id)
+      {
+        break;
+      }
+      if(mmap_elem->mapid == the_map_id)
+      {
+        e=list_prev(e);
+        if(pagedir_is_dirty(cur_thread->pagedir,
+                            mmap_elem->upage))
+          {
+            file_seek(mmap_elem->file,mmap_elem->offset);
+            file_write(mmap_elem->file, 
+                       mmap_elem->kpage, 
+                       PGSIZE);
+          }
+        my_delete_mul_sup_free_kpage(mmap_elem->upage, 
+                                     mmap_elem->upage+PGSIZE);
+        list_remove(&mmap_elem->elem);
+        free(mmap_elem);
+      }
+    }
+  file_close(the_file);
+  lock_release(the_lock);
+  free(the_lock);
+}
+
+// need mmap lock before called!
+void my_delete_mmap_table(struct thread* cur_thread)
+{
+  while(!list_empty(&cur_thread->my_mmap_table))
+  {
+    my_delete_mmap_file_in_list(list_begin(&cur_thread->my_mmap_table),
+                                cur_thread);
+  }
 }

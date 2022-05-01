@@ -172,7 +172,10 @@ struct thread
     struct lock my_sons_list_lock;
     struct semaphore* parent_wait_sema;
     struct semaphore* parent_wait_exec_sema;
+    
 #endif
+    struct list my_mmap_table;
+    struct lock my_mmap_table_lock;
 
     /* Owned by thread.c. */
     unsigned magic;                     /**< Detects stack overflow. */

@@ -196,7 +196,7 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
 
       if(!my_insert_sup_table_with_kpage(file, ofs, upage,
                                          read_bytes, zero_bytes,
-                                         writable, kpage))
+                                         writable, kpage, MY_NOT_MMAPED))
          {
            lock_acquire(&my_evict_lock);
            my_delete_mul_sup_free_kpage(u_start,upage);
@@ -291,6 +291,23 @@ page_fault (struct intr_frame *f)
                   return;
                }
             }
+         else if(sup_elem->cur_thread == cur_thread && 
+                sup_elem->upage == fault_upage &&
+                sup_elem->is_mmaped == MY_IS_MMAPED)
+                {
+                   lock_acquire(&my_files_thread_lock);
+                   memset(sup_elem->kpage, 0, PGSIZE);
+                   file_seek(sup_elem->file, sup_elem->ofs);
+                   file_read(sup_elem->file, sup_elem->kpage,
+                             sup_elem->read_bytes);
+                   lock_release(&my_files_thread_lock);
+                   ASSERT(install_page (sup_elem->upage, 
+                                        sup_elem->kpage, 
+                                        sup_elem->writable));
+                   lock_release(&my_evict_lock);
+                   lock_release(&my_sup_table_lock);
+                   return;
+                }
       }
    if(flag)
    {
@@ -388,7 +405,7 @@ page_fault (struct intr_frame *f)
             {
                if(!my_insert_sup_table_with_kpage(NULL,0,
                      (void*)fault_upage, PGSIZE
-                     ,0,true,kpage))
+                     ,0,true,kpage,MY_NOT_MMAPED))
                   {
                      palloc_free_page (kpage);
                      return;
