@@ -225,12 +225,14 @@ process_exit (void)
          directory before destroying the process's page
          directory, or our active page directory will be one
          that's been freed (and cleared). */
+      lock_acquire(&my_evict_lock);
       lock_acquire(&cur->my_mmap_table_lock);
       my_delete_mmap_table(cur);
       lock_release(&cur->my_mmap_table_lock);
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       my_delete_mul_sup_free_kpage_by_thread();
+      lock_release(&my_evict_lock);
     }
 
 }
@@ -746,6 +748,15 @@ void my_delete_sup_elem_free_kpage_no_lock(
 {
    if(sup_elem->kpage!=NULL)
       palloc_free_page(sup_elem->kpage);
+    else if(sup_elem->swap_plot!=MY_NO_PLOT)
+    {
+      lock_acquire(&my_swap_table.lock);
+      bitmap_set_multiple(
+          my_swap_table.used_map,
+          sup_elem->swap_plot,
+          8,false);
+      lock_release(&my_swap_table.lock);
+    }
    list_remove(&sup_elem->elem);
    free(sup_elem);
 }
