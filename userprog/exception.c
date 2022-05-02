@@ -305,6 +305,8 @@ page_fault (struct intr_frame *f)
                    file_seek(sup_elem->file, sup_elem->ofs);
                    file_read(sup_elem->file, sup_elem->kpage,
                              sup_elem->read_bytes);
+                   pagedir_set_dirty(sup_elem->cur_thread->pagedir,
+                                     sup_elem->kpage, false);
                    ASSERT(install_page (sup_elem->upage, 
                                         sup_elem->kpage, 
                                         sup_elem->writable));

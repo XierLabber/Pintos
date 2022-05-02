@@ -888,7 +888,9 @@ void my_delete_mmap_file_in_list(struct list_elem* e,
       {
         e=list_prev(e);
         if(pagedir_is_dirty(cur_thread->pagedir,
-                            mmap_elem->upage))
+                            mmap_elem->upage) ||
+           pagedir_is_dirty(cur_thread->pagedir,
+                            mmap_elem->kpage))
           {
             file_seek(mmap_elem->file,mmap_elem->offset);
             file_write(mmap_elem->file, 

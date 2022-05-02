@@ -246,11 +246,15 @@ uint32_t* my_choose_evict()
            frame_elem->can_be_evict)
         {
           if(pagedir_is_accessed(frame_elem->cur_thread->pagedir,
-                                 frame_elem->upage))
+                                 frame_elem->upage) ||
+             pagedir_is_accessed(frame_elem->cur_thread->pagedir,
+                                 frame_elem->kpage))
           {
             e=list_next(e);
             pagedir_set_accessed(frame_elem->cur_thread->pagedir,
                                  frame_elem->upage, false);
+            pagedir_set_accessed(frame_elem->cur_thread->pagedir,
+                                 frame_elem->kpage, false);
             list_remove(&frame_elem->elem);
             list_push_front(&my_frame_table, &frame_elem->elem);
           }
@@ -288,7 +292,8 @@ bool my_evict()
       {
         uint32_t* pd = sup_elem->cur_thread->pagedir;
         void * upage = sup_elem->upage;
-        if(pagedir_is_dirty(pd, upage))
+        if(pagedir_is_dirty(pd, upage) || 
+           pagedir_is_dirty(pd, sup_elem->kpage))
         {
           need_to_swap = true;
         }
