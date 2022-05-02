@@ -256,12 +256,13 @@ page_from_pool (const struct pool *pool, void *page)
 
 uint32_t* my_choose_evict(uint32_t** upage)
 {
+  lock_acquire(&my_frame_table_lock);
+  
   if(list_empty(&my_frame_table))
   {
     return NULL;
   }
 
-  lock_acquire(&my_frame_table_lock);
   struct list_elem* e;
   for(e=list_rbegin(&my_frame_table);
       e!=list_rend(&my_frame_table);

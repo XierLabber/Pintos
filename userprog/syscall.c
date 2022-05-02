@@ -52,6 +52,11 @@ bool my_judge_ok_to_mmap(struct file* the_file, void* addr);
 bool my_cmp_mappings(const struct list_elem* e1,
                      const struct list_elem* e2,
                      void* aux UNUSED);
+void my_knock_the_buffer(char* the_buffer, int the_size);
+void my_set_buffer_evict(char* the_buffer, 
+                         int the_size, 
+                         struct thread* cur_thread,
+                         int can_be_evicted);
 
 void
 syscall_init (void) 
@@ -322,35 +327,16 @@ void my_sys_read(struct intr_frame *f)
       the_buffer[i]=input_getc();
     }
     my_return((uint32_t)the_size,f);
+    lock_acquire(&my_frame_table_lock);
+    my_set_buffer_evict(the_buffer, the_size, cur_thread, 1);
+    lock_release(&my_frame_table_lock);
     return;
   }
   else
   {
-    *(char *)the_buffer = *(char *)the_buffer;
-    for(void *knock = (void *)((uint32_t)pg_round_down(the_buffer) + PGSIZE);
-        (uint32_t)knock <= (uint32_t)(the_buffer + the_size - 1);
-        knock = (void *)((uint32_t)knock + PGSIZE))
-      {
-        *(char *)knock = *(char *)knock;
-      }
+    my_knock_the_buffer(the_buffer, the_size);
     lock_acquire(&my_frame_table_lock);
-    for(e=list_begin(&my_frame_table);
-        e!=list_end(&my_frame_table);
-        e=list_next(e))
-      {
-        struct my_frame_table_elem* frame_elem = 
-          list_entry(e, struct my_frame_table_elem, elem);
-        if(frame_elem->cur_thread == cur_thread &&
-           frame_elem->upage >= pg_round_down(the_buffer) &&
-           frame_elem->upage <= 
-              pg_round_down((void*)(the_buffer + the_size - 1)))
-        {
-          frame_elem->can_be_evict = 0;
-          // be sure that this page is not evicted here
-          *(char *)frame_elem->upage
-             =*(char *)frame_elem->upage; 
-        }
-      }
+    my_set_buffer_evict(the_buffer, the_size, cur_thread, 0);
     lock_release(&my_frame_table_lock);
 
     struct file* the_file=my_get_file(the_fd, 
@@ -366,20 +352,7 @@ void my_sys_read(struct intr_frame *f)
     if(!flag)  
       lock_release(&my_files_thread_lock);
     lock_acquire(&my_frame_table_lock);
-    for(e=list_begin(&my_frame_table);
-        e!=list_end(&my_frame_table);
-        e=list_next(e))
-      {
-        struct my_frame_table_elem* frame_elem = 
-          list_entry(e, struct my_frame_table_elem, elem);
-        if(frame_elem->cur_thread == cur_thread &&
-           frame_elem->upage >= pg_round_down(the_buffer) &&
-           frame_elem->upage <= 
-              pg_round_down((void*)(the_buffer + the_size - 1)))
-        {
-          frame_elem->can_be_evict = 1;
-        }
-      }
+    my_set_buffer_evict(the_buffer, the_size, cur_thread, 1);
     lock_release(&my_frame_table_lock);
     my_return((uint32_t)ans,f);
     return;
@@ -777,4 +750,37 @@ bool my_cmp_mappings(const struct list_elem* e1,
   struct my_mmap_table_elem* mmap_elem2 = 
     list_entry(e2, struct my_mmap_table_elem, elem);
   return mmap_elem1->mapid < mmap_elem2->mapid;
+}
+
+void my_knock_the_buffer(char* the_buffer, int the_size)
+{
+  *(char *)the_buffer = *(char *)the_buffer;
+  for(void *knock = (void *)((uint32_t)pg_round_down(the_buffer) + PGSIZE);
+      (uint32_t)knock <= (uint32_t)(the_buffer + the_size - 1);
+      knock = (void *)((uint32_t)knock + PGSIZE))
+    {
+      *(char *)knock = *(char *)knock;
+    }
+}
+
+void my_set_buffer_evict(char* the_buffer, 
+                         int the_size, 
+                         struct thread* cur_thread,
+                         int can_be_evicted)
+{
+  struct list_elem* e;
+  for(e=list_begin(&my_frame_table);
+      e!=list_end(&my_frame_table);
+      e=list_next(e))
+    {
+      struct my_frame_table_elem* frame_elem = 
+        list_entry(e, struct my_frame_table_elem, elem);
+      if(frame_elem->cur_thread == cur_thread &&
+         frame_elem->upage >= pg_round_down(the_buffer) &&
+         frame_elem->upage <= 
+            pg_round_down((void*)(the_buffer + the_size - 1)))
+      {
+        frame_elem->can_be_evict = can_be_evicted;
+      }
+    }
 }
