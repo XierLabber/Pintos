@@ -167,6 +167,8 @@ palloc_free_multiple (void *pages, size_t page_cnt)
   for(unsigned i=0;i<page_cnt;i++)
   {
     struct list_elem* e;
+    void* upage = NULL;
+    struct thread* cur_thread = NULL;
     for(e=list_begin(&my_frame_table);
         e!=list_end(&my_frame_table);
         e=list_next(e))
@@ -176,10 +178,35 @@ palloc_free_multiple (void *pages, size_t page_cnt)
       if(frame_elem->kpage == (void*)(pages+i*PGSIZE))
       {
         e=list_prev(e);
+        upage = frame_elem->upage;
+        cur_thread = frame_elem->cur_thread;
         list_remove(&frame_elem->elem);
         lock_release(&my_frame_table_lock);
         free(frame_elem);
         lock_acquire(&my_frame_table_lock);
+        break;
+      }
+      if(upage!=NULL)
+      {
+        uint32_t hash_no = my_hash((uint32_t) upage);
+        lock_acquire(&my_sup_table_lock[hash_no]);
+        struct list_elem* e1;
+        for(e1=list_begin(&my_sup_table[hash_no]);
+            e1!=list_end(&my_sup_table[hash_no]);
+            e1=list_next(e1))
+          {
+            struct my_sup_table_elem* sup_elem = 
+              list_entry(e1, struct my_sup_table_elem, elem);
+            if(sup_elem->kpage == (void*)(pages+i*PGSIZE) && 
+               sup_elem->cur_thread == cur_thread &&
+               sup_elem->upage == upage)
+            {
+              list_remove(e1);
+              free(sup_elem);
+              break;
+            }
+          }
+        lock_release(&my_sup_table_lock[hash_no]);
       }
     }
   }
