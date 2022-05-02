@@ -245,10 +245,22 @@ uint32_t* my_choose_evict()
         if(is_user_vaddr(frame_elem->upage) && 
            frame_elem->can_be_evict)
         {
-          uint32_t* ans = frame_elem->kpage;
-          frame_elem->can_be_evict = 0;
-          lock_release(&my_frame_table_lock);
-          return ans;
+          if(pagedir_is_accessed(frame_elem->cur_thread->pagedir,
+                                 frame_elem->upage))
+          {
+            e=list_next(e);
+            pagedir_set_accessed(frame_elem->cur_thread->pagedir,
+                                 frame_elem->upage, false);
+            list_remove(&frame_elem->elem);
+            list_push_front(&my_frame_table, &frame_elem->elem);
+          }
+          else
+          {
+            uint32_t* ans = frame_elem->kpage;
+            frame_elem->can_be_evict = 0;
+            lock_release(&my_frame_table_lock);
+            return ans;
+          }
         }
       }
   lock_release(&my_frame_table_lock);
