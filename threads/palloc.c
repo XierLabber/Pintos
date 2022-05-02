@@ -227,7 +227,7 @@ page_from_pool (const struct pool *pool, void *page)
   return page_no >= start_page && page_no < end_page;
 }
 
-uint32_t* my_choose_evict()
+uint32_t* my_choose_evict(uint32_t** upage)
 {
   if(list_empty(&my_frame_table))
   {
@@ -261,6 +261,7 @@ uint32_t* my_choose_evict()
           else
           {
             uint32_t* ans = frame_elem->kpage;
+            *upage = frame_elem->upage;
             frame_elem->can_be_evict = 0;
             lock_release(&my_frame_table_lock);
             return ans;
@@ -274,16 +275,18 @@ uint32_t* my_choose_evict()
 bool my_evict()
 {
   lock_acquire(&my_evict_lock);
-  uint32_t* evict_kpage = my_choose_evict();
+  uint32_t* upage;
+  uint32_t* evict_kpage = my_choose_evict(&upage);
   bool need_to_swap = false;
   bool is_mmapped = false;
   struct thread* mapped_thread;
-  lock_acquire(&my_sup_table_lock);
+  uint32_t hash_no = my_hash((uint32_t)upage);
+  lock_acquire(&my_sup_table_lock[hash_no]);
   struct list_elem* e;
   block_sector_t swap_plot;
 
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
+  for(e=list_begin(&my_sup_table[hash_no]);
+      e!=list_end(&my_sup_table[hash_no]);
       e=list_next(e))
     {
       struct my_sup_table_elem* sup_elem = 
@@ -315,7 +318,7 @@ bool my_evict()
       if(swap_plot == MY_NO_PLOT)
       {
         lock_release(&my_swap_table.lock);
-        lock_release(&my_sup_table_lock);
+        lock_release(&my_sup_table_lock[hash_no]);
         lock_release(&my_evict_lock);
         return false;
       }
@@ -324,8 +327,8 @@ bool my_evict()
         block_write(my_swap_table.b, swap_plot + i, ((void *)evict_kpage) + i*BLOCK_SECTOR_SIZE);
       }
       lock_release(&my_swap_table.lock);
-      for(e=list_begin(&my_sup_table);
-          e!=list_end(&my_sup_table);
+      for(e=list_begin(&my_sup_table[hash_no]);
+          e!=list_end(&my_sup_table[hash_no]);
           e=list_next(e))
         {
           struct my_sup_table_elem* sup_elem = 
@@ -360,8 +363,8 @@ bool my_evict()
         }
       lock_release(&mapped_thread->my_mmap_table_lock);
       
-      for(e=list_begin(&my_sup_table);
-          e!=list_end(&my_sup_table);
+      for(e=list_begin(&my_sup_table[hash_no]);
+          e!=list_end(&my_sup_table[hash_no]);
           e=list_next(e))
         {
           struct my_sup_table_elem* sup_elem = 
@@ -376,8 +379,8 @@ bool my_evict()
   }
   else
   {
-    for(e=list_begin(&my_sup_table);
-        e!=list_end(&my_sup_table);
+    for(e=list_begin(&my_sup_table[hash_no]);
+        e!=list_end(&my_sup_table[hash_no]);
         e=list_next(e))
       {
         struct my_sup_table_elem* sup_elem = 
@@ -389,7 +392,7 @@ bool my_evict()
         }
       }
   }
-  lock_release(&my_sup_table_lock);
+  lock_release(&my_sup_table_lock[hash_no]);
   palloc_free_page(evict_kpage);
   lock_release(&my_evict_lock);
   return true;

@@ -131,10 +131,11 @@ int my_load_file(struct my_sup_table_elem* sup_elem)
    uint32_t read_bytes = sup_elem->read_bytes; 
    uint32_t zero_bytes = sup_elem->zero_bytes; 
    bool writable = sup_elem->writable;
+   uint32_t hash_no = my_hash((uint32_t)upage);
 
-   lock_acquire(&my_sup_table_lock);
+   lock_acquire(&my_sup_table_lock[hash_no]);
    list_remove(&sup_elem->elem);
-   lock_release(&my_sup_table_lock);
+   lock_release(&my_sup_table_lock[hash_no]);
 
    free(sup_elem);
 
@@ -264,13 +265,14 @@ page_fault (struct intr_frame *f)
       lock_acquire(&my_files_thread_lock);
   lock_acquire(&my_evict_lock);
   void* fault_upage = pg_round_down(fault_addr);
+  uint32_t hash_no = my_hash((uint32_t)fault_upage);
   int flag = 1;
   int found = 0;
   intr_enable ();
-  lock_acquire(&my_sup_table_lock);
+  lock_acquire(&my_sup_table_lock[hash_no]);
   struct list_elem* e;
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
+  for(e=list_begin(&my_sup_table[hash_no]);
+      e!=list_end(&my_sup_table[hash_no]);
       e=list_next(e))
       {
          struct my_sup_table_elem* sup_elem = 
@@ -281,12 +283,12 @@ page_fault (struct intr_frame *f)
             sup_elem->exist == 0)
             {
                found = 1;
-               lock_release(&my_sup_table_lock);
+               lock_release(&my_sup_table_lock[hash_no]);
                lock_release(&my_evict_lock);
                if(!my_load_file(sup_elem))
                {
                   lock_acquire(&my_evict_lock);
-                  lock_acquire(&my_sup_table_lock);
+                  lock_acquire(&my_sup_table_lock[hash_no]);
                   flag = 0;
                   break;
                }
@@ -311,7 +313,7 @@ page_fault (struct intr_frame *f)
                                         sup_elem->kpage, 
                                         sup_elem->writable));
                    lock_release(&my_evict_lock);
-                   lock_release(&my_sup_table_lock);
+                   lock_release(&my_sup_table_lock[hash_no]);
                    if(need_file_lock_flag)
                        lock_release(&my_files_thread_lock);
                    return;
@@ -319,8 +321,8 @@ page_fault (struct intr_frame *f)
       }
    if(flag)
    {
-      for(e=list_begin(&my_sup_table);
-         e!=list_end(&my_sup_table);
+      for(e=list_begin(&my_sup_table[hash_no]);
+         e!=list_end(&my_sup_table[hash_no]);
          e=list_next(e))
          {
             struct my_sup_table_elem* sup_elem = 
@@ -333,7 +335,7 @@ page_fault (struct intr_frame *f)
                   if(sup_elem->swap_plot == MY_NO_PLOT)
                   {
                      list_remove(&sup_elem->elem);
-                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_sup_table_lock[hash_no]);
                      lock_release(&my_evict_lock);
                      bool ans = load_segment(sup_elem->file,
                                              sup_elem->ofs,
@@ -342,14 +344,14 @@ page_fault (struct intr_frame *f)
                                              sup_elem->zero_bytes,
                                              sup_elem->writable);
                      lock_acquire(&my_evict_lock);
-                     lock_acquire(&my_sup_table_lock);
+                     lock_acquire(&my_sup_table_lock[hash_no]);
                      free(sup_elem);
                      if(!ans)
                      {
                         flag = 0;
                         break;
                      }
-                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_sup_table_lock[hash_no]);
                      lock_release(&my_evict_lock);
                      if(need_file_lock_flag)
                         lock_release(&my_files_thread_lock);
@@ -357,11 +359,11 @@ page_fault (struct intr_frame *f)
                   }
                   else
                   {
-                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_sup_table_lock[hash_no]);
                      lock_release(&my_evict_lock);
                      uint8_t *kpage = palloc_get_page (PAL_USER);
                      lock_acquire(&my_evict_lock);
-                     lock_acquire(&my_sup_table_lock);
+                     lock_acquire(&my_sup_table_lock[hash_no]);
                      if(kpage == NULL)
                      {
                         flag = 0;
@@ -387,7 +389,7 @@ page_fault (struct intr_frame *f)
                                        sup_elem->upage, true);
                      pagedir_set_accessed(sup_elem->cur_thread->pagedir,
                                          sup_elem->upage, true);
-                     lock_release(&my_sup_table_lock);
+                     lock_release(&my_sup_table_lock[hash_no]);
                      lock_release(&my_evict_lock);
                      if(need_file_lock_flag)
                         lock_release(&my_files_thread_lock);
@@ -403,7 +405,7 @@ page_fault (struct intr_frame *f)
    
    if(my_judge_is_stack_request(f,fault_addr))
    {
-      lock_release(&my_sup_table_lock);
+      lock_release(&my_sup_table_lock[hash_no]);
       lock_release(&my_evict_lock);
 
       uint8_t *kpage;
@@ -437,7 +439,7 @@ page_fault (struct intr_frame *f)
          lock_release(&my_files_thread_lock);
       return;
    }
-   lock_release(&my_sup_table_lock);
+   lock_release(&my_sup_table_lock[hash_no]);
    lock_release(&my_evict_lock);
    if(need_file_lock_flag)
       lock_release(&my_files_thread_lock);

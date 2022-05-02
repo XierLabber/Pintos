@@ -533,9 +533,10 @@ bool my_insert_sup_table(struct file *file, off_t ofs, uint8_t *upage,
   sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 0;
   sup_elem->is_mmaped = is_mmaped;
-  lock_acquire(&my_sup_table_lock);
-  list_push_back(&my_sup_table, &sup_elem->elem);
-  lock_release(&my_sup_table_lock);
+  uint32_t hash_no = my_hash((uint32_t)upage);
+  lock_acquire(&my_sup_table_lock[hash_no]);
+  list_push_back(&my_sup_table[hash_no], &sup_elem->elem);
+  lock_release(&my_sup_table_lock[hash_no]);
   return true;
 }
 
@@ -560,9 +561,10 @@ bool my_insert_sup_table_with_kpage(struct file *file, off_t ofs,
   sup_elem->swap_plot = MY_NO_PLOT;
   sup_elem->exist = 1;
   sup_elem->is_mmaped = is_mmaped;
-  lock_acquire(&my_sup_table_lock);
-  list_push_back(&my_sup_table, &sup_elem->elem);
-  lock_release(&my_sup_table_lock);
+  uint32_t hash_no = my_hash((uint32_t)upage);
+  lock_acquire(&my_sup_table_lock[hash_no]);
+  list_push_back(&my_sup_table[hash_no], &sup_elem->elem);
+  lock_release(&my_sup_table_lock[hash_no]);
   return true;
 }
 
@@ -766,42 +768,48 @@ void my_delete_mul_sup_free_kpage(
 {
    struct thread* cur_thread=thread_current();
    struct list_elem* e;
-   lock_acquire(&my_sup_table_lock);
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
-      e=list_next(e))
-      {
-         struct my_sup_table_elem* sup_elem = 
-            list_entry(e, struct my_sup_table_elem, elem);
-         if(sup_elem->cur_thread == cur_thread && 
-            sup_elem->upage >= (void *)u_start && 
-            sup_elem->upage < (void *)u_end)
-            {
-               e=list_prev(e);
-               my_delete_sup_elem_free_kpage_no_lock(sup_elem);
-            }
-      }
-   lock_release(&my_sup_table_lock);
+   for(int i=0;i<MY_HASH_LIST_NUM;i++)
+   {
+      lock_acquire(&my_sup_table_lock[i]);
+      for(e=list_begin(&my_sup_table[i]);
+          e!=list_end(&my_sup_table[i]);
+          e=list_next(e))
+          {
+            struct my_sup_table_elem* sup_elem = 
+                list_entry(e, struct my_sup_table_elem, elem);
+            if(sup_elem->cur_thread == cur_thread && 
+                sup_elem->upage >= (void *)u_start && 
+                sup_elem->upage < (void *)u_end)
+                {
+                  e=list_prev(e);
+                  my_delete_sup_elem_free_kpage_no_lock(sup_elem);
+                }
+          }
+      lock_release(&my_sup_table_lock[i]);
+   }
 }
 
 void my_delete_mul_sup_free_kpage_by_thread()
 {
    struct thread* cur_thread=thread_current();
    struct list_elem* e;
-   lock_acquire(&my_sup_table_lock);
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
-      e=list_next(e))
-      {
-         struct my_sup_table_elem* sup_elem = 
-            list_entry(e, struct my_sup_table_elem, elem);
-         if(sup_elem->cur_thread == cur_thread)
-            {
-               e=list_prev(e);
-               my_delete_sup_elem_free_kpage_no_lock(sup_elem);
-            }
-      }
-   lock_release(&my_sup_table_lock);
+   for(int i=0;i<MY_HASH_LIST_NUM;i++)
+   {
+      lock_acquire(&my_sup_table_lock[i]);
+      for(e=list_begin(&my_sup_table[i]);
+          e!=list_end(&my_sup_table[i]);
+          e=list_next(e))
+          {
+            struct my_sup_table_elem* sup_elem = 
+                list_entry(e, struct my_sup_table_elem, elem);
+            if(sup_elem->cur_thread == cur_thread)
+                {
+                  e=list_prev(e);
+                  my_delete_sup_elem_free_kpage_no_lock(sup_elem);
+                }
+          }
+      lock_release(&my_sup_table_lock[i]);
+   }
 }
 
 void my_swap_table_init(void)
@@ -916,4 +924,11 @@ void my_delete_mmap_table(struct thread* cur_thread)
     my_delete_mmap_file_in_list(list_begin(&cur_thread->my_mmap_table),
                                 cur_thread);
   }
+}
+
+uint32_t my_hash(uint32_t upage)
+{
+  int page_num = upage >> PGBITS;
+  return ((page_num*page_num)&(MY_HASH_MASK<<MY_HASH_SHIFT))
+         >>MY_HASH_SHIFT;
 }

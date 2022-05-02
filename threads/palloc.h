@@ -19,6 +19,6 @@ void *palloc_get_multiple (enum palloc_flags, size_t page_cnt);
 void palloc_free_page (void *);
 void palloc_free_multiple (void *, size_t page_cnt);
 bool my_evict(void);
-uint32_t* my_choose_evict(void);
+uint32_t* my_choose_evict(uint32_t** upage);
 
 #endif /**< threads/palloc.h */

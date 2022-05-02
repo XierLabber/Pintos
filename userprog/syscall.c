@@ -289,10 +289,11 @@ void my_sys_read(struct intr_frame *f)
   my_filter_buffer(the_buffer, the_size, f);
   void* upage = (void*)((pg_no(the_buffer))<<PGBITS);
   struct thread* cur_thread = thread_current();
-  lock_acquire(&my_sup_table_lock);
+  uint32_t hash_no = my_hash((uint32_t)upage);
+  lock_acquire(&my_sup_table_lock[hash_no]);
   struct list_elem* e;
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
+  for(e=list_begin(&my_sup_table[hash_no]);
+      e!=list_end(&my_sup_table[hash_no]);
       e=list_next(e))
     {
       struct my_sup_table_elem* sup_elem = 
@@ -302,7 +303,7 @@ void my_sys_read(struct intr_frame *f)
       {
         if(sup_elem->writable == false)
         {
-          lock_release(&my_sup_table_lock);
+          lock_release(&my_sup_table_lock[hash_no]);
           cur_thread->my_exit_status = -1;
           thread_exit();
         }
@@ -312,7 +313,7 @@ void my_sys_read(struct intr_frame *f)
         }
       }
     }
-  lock_release(&my_sup_table_lock);
+  lock_release(&my_sup_table_lock[hash_no]);
 
   if(the_fd == 0)
   {
@@ -480,9 +481,10 @@ bool my_judge_ptr(const void* p)
   }
   
   struct list_elem* e;
-  lock_acquire(&my_sup_table_lock);
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
+  uint32_t hash_no = my_hash((uint32_t)pg_round_down(p));
+  lock_acquire(&my_sup_table_lock[hash_no]);
+  for(e=list_begin(&my_sup_table[hash_no]);
+      e!=list_end(&my_sup_table[hash_no]);
       e=list_next(e))
       {
          struct my_sup_table_elem* sup_elem = 
@@ -497,11 +499,11 @@ bool my_judge_ptr(const void* p)
             sup_elem->read_bytes + sup_elem->zero_bytes) &&
             thread_current() == sup_elem->cur_thread)
             {
-              lock_release(&my_sup_table_lock);
+              lock_release(&my_sup_table_lock[hash_no]);
               return true;
             }
       }
-  lock_release(&my_sup_table_lock);
+  lock_release(&my_sup_table_lock[hash_no]);
 
   void* my_tmp = 
     pagedir_get_page(
@@ -539,9 +541,10 @@ bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f)
   {
     bool ans = false;  
     struct list_elem* e;
-    lock_acquire(&my_sup_table_lock);
-    for(e=list_begin(&my_sup_table);
-        e!=list_end(&my_sup_table);
+    uint32_t hash_no = my_hash((uint32_t)(pg_round_down(p)));
+    lock_acquire(&my_sup_table_lock[hash_no]);
+    for(e=list_begin(&my_sup_table[hash_no]);
+        e!=list_end(&my_sup_table[hash_no]);
         e=list_next(e))
         {
            struct my_sup_table_elem* sup_elem = 
@@ -556,7 +559,7 @@ bool my_judge_ptr_in_stack(const void* p, struct intr_frame *f)
                 break;
               }
         }
-    lock_release(&my_sup_table_lock);
+    lock_release(&my_sup_table_lock[hash_no]);
     if(ans == false)
     {
       uint8_t *kpage;
@@ -744,9 +747,11 @@ bool my_judge_ok_to_mmap(struct file* file, void* addr)
   struct list_elem* e;
   struct thread* cur_thread = thread_current();
 
-  lock_acquire(&my_sup_table_lock);
-  for(e=list_begin(&my_sup_table);
-      e!=list_end(&my_sup_table);
+  uint32_t hash_no = my_hash((uint32_t)addr);
+
+  lock_acquire(&my_sup_table_lock[hash_no]);
+  for(e=list_begin(&my_sup_table[hash_no]);
+      e!=list_end(&my_sup_table[hash_no]);
       e=list_next(e))
     {
       struct my_sup_table_elem* sup_elem = 
@@ -754,11 +759,11 @@ bool my_judge_ok_to_mmap(struct file* file, void* addr)
       if(sup_elem->cur_thread == cur_thread &&
          sup_elem->upage == addr)
          {
-           lock_release(&my_sup_table_lock);
+           lock_release(&my_sup_table_lock[hash_no]);
            return false;
          }
     }
-  lock_release(&my_sup_table_lock);
+  lock_release(&my_sup_table_lock[hash_no]);
 
   return true;
 }

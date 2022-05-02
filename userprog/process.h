@@ -14,6 +14,10 @@
 #define MY_IS_MMAPED 1
 #define MY_NOT_MMAPED 0
 #define MY_FALSE_MAPID -1
+#define MY_HASH_BIT 4
+#define MY_HASH_LIST_NUM (1<<MY_HASH_BIT)
+#define MY_HASH_MASK (MY_HASH_LIST_NUM - 1)
+#define MY_HASH_SHIFT 7
 
 struct my_frame_table_elem
 {
@@ -44,9 +48,9 @@ struct my_sup_table_elem
     int is_mmaped;
 };
 
-struct list my_sup_table;
+struct list my_sup_table[MY_HASH_LIST_NUM];
 
-struct lock my_sup_table_lock;
+struct lock my_sup_table_lock[MY_HASH_LIST_NUM];
 
 struct lock my_evict_lock;
 
@@ -102,5 +106,6 @@ block_sector_t my_get_swap_plot(void);
 int my_get_next_map_id(struct thread* cur_thread);
 void my_delete_mmap_file_in_list(struct list_elem* e,struct thread* t);
 void my_delete_mmap_table(struct thread* cur_thread);
+uint32_t my_hash(uint32_t upage);
 
 #endif /**< userprog/process.h */
