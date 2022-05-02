@@ -257,7 +257,7 @@ page_from_pool (const struct pool *pool, void *page)
 uint32_t* my_choose_evict(uint32_t** upage)
 {
   lock_acquire(&my_frame_table_lock);
-  
+
   if(list_empty(&my_frame_table))
   {
     return NULL;
@@ -308,8 +308,9 @@ bool my_evict()
   bool need_to_swap = false;
   bool is_mmapped = false;
   struct thread* mapped_thread;
-  uint32_t hash_no = my_hash((uint32_t)upage);
+  uint32_t hash_no = my_hash((uint32_t)upage);;
   lock_acquire(&my_sup_table_lock[hash_no]);
+  lock_acquire(&my_swap_table.lock);
   struct list_elem* e;
   block_sector_t swap_plot;
 
@@ -341,7 +342,6 @@ bool my_evict()
   {
     if(!is_mmapped)
     {
-      lock_acquire(&my_swap_table.lock);
       swap_plot = my_get_swap_plot();
       if(swap_plot == MY_NO_PLOT)
       {
@@ -370,6 +370,7 @@ bool my_evict()
     }
     else
     {
+      lock_release(&my_swap_table.lock);
       lock_acquire(&mapped_thread->my_mmap_table_lock);
       struct list_elem* e;
       for(e=list_begin(&mapped_thread->my_mmap_table);
